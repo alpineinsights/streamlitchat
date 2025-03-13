@@ -1,28 +1,25 @@
 import streamlit as st
 import os
-from rag_components import RAGChatbot
+from rag_components import RAGChatbot, VOYAGE_EMBEDDING_MODEL
 
 # Set page configuration
-st.set_page_config(page_title="Finance RAG Chatbot", page_icon="💹", layout="wide")
+st.set_page_config(page_title="Financial RAG Chatbot", page_icon="💹", layout="wide")
 
 # Constants for API configuration
 QDRANT_URL = "https://f540a861-3be2-4d1b-9e5a-5754b5c86508.eu-central-1-0.aws.cloud.qdrant.io"
 QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.v0yhn3vR8fkJXiom7yLlNwLR-xbAACHSk-vHqZJhH50"
 COLLECTION_NAME = "documents"  # Replace with your actual collection name
 
-# Default models (can be overridden in UI)
-DEFAULT_EMBEDDING_MODEL = "voyage-finance-2"  # Finance-specific model
-DEFAULT_RERANKER_MODEL = "rerank-2"  # Latest reranker model
-
 # Get API keys from Streamlit secrets or environment variables
 CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"] if "CLAUDE_API_KEY" in st.secrets else os.environ.get("CLAUDE_API_KEY", "")
 VOYAGE_API_KEY = st.secrets["VOYAGE_API_KEY"] if "VOYAGE_API_KEY" in st.secrets else os.environ.get("VOYAGE_API_KEY", "")
 
 # App title and description
-st.title("Finance RAG Chatbot")
+st.title("Financial RAG Chatbot with Qdrant, Claude 3.5 Sonnet, and Voyage Finance")
+
 st.markdown("""
-This chatbot uses Voyage AI embeddings and reranking with Qdrant vector search to find relevant financial documents,
-and generates responses using Claude 3.7 Sonnet.
+This financial chatbot uses hybrid search with dense and sparse embeddings from Voyage AI's finance model,
+retrieves relevant documents from Qdrant, and generates responses using Claude 3.5 Sonnet.
 """)
 
 # Check for required API keys
@@ -58,43 +55,30 @@ for message in st.session_state.messages:
 
 # Chat settings in sidebar
 st.sidebar.title("Chatbot Settings")
-
-# Model settings
+use_reranking = st.sidebar.checkbox("Use Reranking", value=True)
 embedding_model = st.sidebar.selectbox(
     "Embedding Model", 
-    ["voyage-finance-2", "voyage-large-2", "voyage-code-2"],
+    ["voyage-finance-2", "voyage-large-2"], 
     index=0
 )
-
 output_type = st.sidebar.selectbox(
-    "Embedding Type", 
-    ["dense", "hybrid"],
-    index=0,
-    help="Finance models may only support dense embeddings"
-)
-
-use_reranking = st.sidebar.checkbox("Use Reranking", value=True)
-
-reranker_model = st.sidebar.selectbox(
-    "Reranker Model",
-    ["rerank-2", "rerank-2-lite"],
+    "Embedding Type",
+    ["hybrid", "dense"],
     index=0
 )
-
 top_k = st.sidebar.slider("Number of documents to retrieve", min_value=1, max_value=10, value=5)
 
 # Add advanced settings section
 with st.sidebar.expander("Advanced Settings"):
     st.markdown("""
-    - **voyage-finance-2**: Specialized for financial text and documents
-    - **voyage-large-2**: General-purpose model (supports hybrid embeddings)
-    - **voyage-code-2**: Optimized for code and technical content
-    - **rerank-2**: High-quality reranker with up to 16K tokens
-    - **rerank-2-lite**: Faster reranker with up to 8K tokens
+    - **Hybrid Search**: This chatbot uses both dense (1024-dim) and sparse (100-dim) vectors for search
+    - **Finance-optimized**: Using voyage-finance-2 model for finance-specific embeddings
+    - **Reranking**: When enabled, retrieved documents are reordered by relevance
+    - **Collection**: Using the `documents` collection in Qdrant
     """)
 
 # User input
-if query := st.chat_input("Ask a question about finance..."):
+if query := st.chat_input("Ask a financial question..."):
     # Add user query to chat history
     st.session_state.messages.append({"role": "user", "content": query})
     
@@ -104,14 +88,13 @@ if query := st.chat_input("Ask a question about finance..."):
     
     # Display a spinner while processing
     with st.chat_message("assistant"):
-        with st.spinner("Researching financial information..."):
+        with st.spinner("Processing your question..."):
             # Process query and get response
             response = chatbot.process_query(
                 query=query,
                 embedding_model=embedding_model,
                 output_type=output_type,
                 use_reranking=use_reranking,
-                reranker_model=reranker_model,
                 top_k=top_k
             )
             

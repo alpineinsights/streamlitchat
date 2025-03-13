@@ -11,7 +11,7 @@ VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Updated to finance-specific model
 VOYAGE_RERANKER_MODEL = "rerank-2"  # Latest reranker model
 
 # Claude model configuration
-CLAUDE_MODEL = "claude-3-5-sonnet-20240620"  # Updated to the latest Claude model
+CLAUDE_MODEL = "claude-3-5-sonnet-20240620"  # Updated to latest Claude model
 
 class VoyageAIClient:
     """Client for Voyage AI embedding and reranking services."""
@@ -36,20 +36,20 @@ class VoyageAIClient:
         Returns:
             Tuple of (dense_embedding, sparse_embedding)
         """
-        # Prepare the request payload
+        # For finance model, use separate calls for dense and sparse vectors
+        if model == "voyage-finance-2" and output_type == "hybrid":
+            return self._create_finance_hybrid_embeddings(text, model)
+        
+        # Standard request for other models
         payload = {
             "model": model,
             "input": text,
-            "input_type": "document"  # Specify document type for better finance context handling
+            "input_type": "document"
         }
         
         # Only add output_type for hybrid requests with models that support it
         if output_type == "hybrid" and "finance" not in model:
             payload["output_type"] = "hybrid"
-        elif output_type == "hybrid" and model == "voyage-finance-2":
-            # Special handling for voyage-finance-2 which requires separate calls
-            # for dense and sparse vectors
-            return self._create_finance_hybrid_embeddings(text, model)
         
         try:
             # Make the request to the Voyage API
@@ -59,7 +59,6 @@ class VoyageAIClient:
                 json=payload
             )
             
-            # Check for errors
             if not response.ok:
                 try:
                     error_detail = response.json()
@@ -158,7 +157,6 @@ class VoyageAIClient:
         Returns:
             List of reranked documents with scores
         """
-        # Prepare the request payload
         payload = {
             "model": model,
             "query": query,
@@ -167,14 +165,12 @@ class VoyageAIClient:
         }
         
         try:
-            # Make the request to the Voyage API
             response = requests.post(
                 self.reranking_endpoint,
                 headers=self.headers,
                 json=payload
             )
             
-            # Check for errors
             if not response.ok:
                 try:
                     error_detail = response.json()
@@ -183,7 +179,6 @@ class VoyageAIClient:
                 st.error(f"Reranking API error: {response.status_code} - {error_detail}")
                 return []
             
-            # Parse the response
             data = response.json()
             return data['results']
         
@@ -220,7 +215,7 @@ class ClaudeClient:
         # Create combined context
         combined_contexts = "\n\n".join([f"DOCUMENT: {context}" for context in contexts])
         
-        # If no system prompt is provided, use a default one focused on financial information
+        # Financial system prompt
         if system_prompt is None:
             system_prompt = """You are a helpful financial AI assistant. Answer the user's question based on the provided context.
 If the answer cannot be found in the context, say "I don't have enough information to answer that question."
@@ -311,34 +306,62 @@ class QdrantSearch:
             List of search results
         """
         try:
-            search_params = models.SearchParams(
-                hnsw_ef=128,
-                exact=False
-            )
+            # Prepare batch search requests for both vector types
+            requests = []
             
-            # Prepare query vector dictionary
-            query_vector = {
-                "dense": dense_vector
-            }
+            # Add dense vector request
+            if dense_vector:
+                requests.append(
+                    models.SearchRequest(
+                        vector=models.NamedVector(
+                            name="dense",
+                            vector=dense_vector
+                        ),
+                        limit=limit * 2,  # Get more results for better merging
+                        with_payload=True
+                    )
+                )
             
-            # Add sparse vector if available
+            # Add sparse vector request if available
             if sparse_vector:
                 # Convert sparse vector to the format Qdrant expects
                 indices, values = zip(*sparse_vector)
-                query_vector["sparse"] = models.SparseVector(
-                    indices=list(indices),
-                    values=list(values),
+                requests.append(
+                    models.SearchRequest(
+                        vector=models.NamedSparseVector(
+                            name="sparse",
+                            vector=models.SparseVector(
+                                indices=list(indices),
+                                values=list(values),
+                            )
+                        ),
+                        limit=limit * 2,  # Get more results for better merging
+                        with_payload=True
+                    )
                 )
             
-            # Use search instead of query method to fix the error
-            results = self.client.search(
+            # Perform batch search
+            batch_results = self.client.search_batch(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
-                limit=limit,
-                with_payload=True
+                requests=requests
             )
             
-            return results
+            # Combine results using reciprocal rank fusion
+            all_results = []
+            for batch in batch_results:
+                all_results.extend(batch)
+            
+            # Remove duplicates and sort by score
+            unique_results = {}
+            for r in all_results:
+                if r.id not in unique_results or r.score > unique_results[r.id].score:
+                    unique_results[r.id] = r
+            
+            combined_results = list(unique_results.values())
+            combined_results.sort(key=lambda x: x.score, reverse=True)
+            
+            return combined_results[:limit]
+            
         except Exception as e:
             st.error(f"Error searching Qdrant: {str(e)}")
             return []
@@ -391,10 +414,15 @@ class RAGChatbot:
             return "No relevant documents found to answer your question."
         
         # Extract document texts from search results
-        documents = [result.payload.get("text", "") for result in search_results if "text" in result.payload]
+        # First try chunk_text field (as seen in the image)
+        documents = [result.payload.get("chunk_text", "") for result in search_results if "chunk_text" in result.payload]
         
         if not documents:
-            return "Found results, but they don't contain text fields. Check your Qdrant collection structure."
+            # Try with "text" field if "chunk_text" is not found
+            documents = [result.payload.get("text", "") for result in search_results if "text" in result.payload]
+            
+            if not documents:
+                return "Found results, but they don't contain text fields. Check your Qdrant collection structure."
         
         # Step 3: Optionally rerank documents
         if use_reranking and len(documents) > 1:

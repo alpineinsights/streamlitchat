@@ -262,7 +262,13 @@ class QdrantSearch:
                 exact=False
             )
             
-            # Determine if we can use hybrid search or need to use dense-only
+            # Create a proper named vector for dense embedding
+            named_dense = models.NamedVector(
+                name="dense",
+                vector=dense_vector
+            )
+            
+            # Determine if we also have sparse vectors to use
             if sparse_vector:
                 # Convert sparse vector to the format Qdrant expects
                 indices, values = zip(*sparse_vector)
@@ -271,21 +277,22 @@ class QdrantSearch:
                     values=list(values),
                 )
                 
-                # Create named vector query for hybrid search
-                query_vector = {
-                    "dense": dense_vector,
-                    "sparse": sparse_vec
-                }
+                # Create a proper named sparse vector
+                named_sparse = models.NamedSparseVector(
+                    name="sparse",
+                    vector=sparse_vec
+                )
+                
+                # Use both vectors for hybrid search
+                vectors = [named_dense, named_sparse]
             else:
-                # Use dense vector only with proper named vector
-                query_vector = {
-                    "dense": dense_vector
-                }
+                # Use only dense vector
+                vectors = [named_dense]
             
-            # Perform the search with named vectors
+            # Perform the search with properly formatted named vectors
             results = self.client.search(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
+                query_vector=vectors,
                 search_params=search_params,
                 limit=limit,
                 with_payload=True

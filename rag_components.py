@@ -1,7 +1,6 @@
-import requests
-import anthropic
-import streamlit as st
 import os
+import requests
+import streamlit as st
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
@@ -104,29 +103,17 @@ class VoyageAIClient:
             return []
 
 class ClaudeClient:
-    """Client for Claude AI completions."""
+    """Client for Claude AI completions using direct API calls."""
     
     def __init__(self, api_key: str):
-        # Store original proxy settings
-        original_http_proxy = os.environ.pop('HTTP_PROXY', None)
-        original_https_proxy = os.environ.pop('HTTPS_PROXY', None)
-        original_http_proxy_lower = os.environ.pop('http_proxy', None)
-        original_https_proxy_lower = os.environ.pop('https_proxy', None)
-        
-        try:
-            # Initialize client without proxy settings
-            self.client = anthropic.Anthropic(api_key=api_key)
-            self.model = CLAUDE_MODEL
-        finally:
-            # Restore original proxy settings
-            if original_http_proxy:
-                os.environ['HTTP_PROXY'] = original_http_proxy
-            if original_https_proxy:
-                os.environ['HTTPS_PROXY'] = original_https_proxy
-            if original_http_proxy_lower:
-                os.environ['http_proxy'] = original_http_proxy_lower
-            if original_https_proxy_lower:
-                os.environ['https_proxy'] = original_https_proxy_lower
+        self.api_key = api_key
+        self.model = CLAUDE_MODEL
+        self.base_url = "https://api.anthropic.com/v1/messages"
+        self.headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01"
+        }
     
     def generate_response(self, query: str, contexts: List[str], system_prompt: str = None) -> str:
         """
@@ -149,134 +136,37 @@ class ClaudeClient:
 If the answer cannot be found in the context, say "I don't have enough information to answer that question."
 Keep your answers concise and to the point."""
         
-        try:
-            # Prepare the message
-            message = self.client.messages.create(
-                model=self.model,
-                system=system_prompt,
-                max_tokens=1024,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"""Here are some relevant documents to help answer the question:
+        # Prepare the request payload
+        payload = {
+            "model": self.model,
+            "system": system_prompt,
+            "max_tokens": 1024,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"""Here are some relevant documents to help answer the question:
 
 {combined_contexts}
 
 Based on the above documents, please answer this question: {query}"""
-                    }
-                ]
-            )
-            
-            return message.content[0].text
-            
-        except Exception as e:
-            st.error(f"Error generating Claude response: {str(e)}")
-            return "I apologize, but I encountered an error generating a response. Please try again."
-
-class QdrantSearch:
-    """Handles search operations with Qdrant."""
-    
-    def __init__(self, url: str, api_key: str, collection_name: str):
-        self.client = QdrantClient(url=url, api_key=api_key)
-        self.collection_name = collection_name
-    
-    def hybrid_search(self, 
-                      dense_vector: List[float], 
-                      sparse_vector: List[Tuple[int, float]], 
-                      limit: int = 5) -> List[Dict[str, Any]]:
-        """
-        Perform hybrid search using both dense and sparse vectors.
-        
-        Args:
-            dense_vector: Dense embedding vector
-            sparse_vector: Sparse embedding as list of (index, value) tuples
-            limit: Maximum number of results to return
-            
-        Returns:
-            List of search results
-        """
-        # Convert sparse vector to the format Qdrant expects
-        indices, values = zip(*sparse_vector) if sparse_vector else ([], [])
-        
-        # Create search request with hybrid search
-        search_params = models.SearchParams(
-            hnsw_ef=128,
-            exact=False
-        )
+                }
+            ]
+        }
         
         try:
-            results = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=models.HybridVector(
-                    dense=dense_vector,
-                    sparse=models.SparseVector(
-                        indices=list(indices),
-                        values=list(values),
-                    ) if sparse_vector else None
-                ),
-                search_params=search_params,
-                limit=limit,
-                with_payload=True
+            # Store original proxy settings
+            orig_http_proxy = os.environ.pop('HTTP_PROXY', None)
+            orig_https_proxy = os.environ.pop('HTTPS_PROXY', None)
+            orig_http_proxy_lower = os.environ.pop('http_proxy', None)
+            orig_https_proxy_lower = os.environ.pop('https_proxy', None)
+            
+            # Make the API request with proxies explicitly disabled
+            response = requests.post(
+                self.base_url,
+                headers=self.headers,
+                json=payload,
+                proxies={"http": None, "https": None}
             )
             
-            return results
-            
-        except Exception as e:
-            st.error(f"Error searching Qdrant: {str(e)}")
-            return []
-
-class RAGChatbot:
-    """RAG Chatbot combining all components."""
-    
-    def __init__(self, qdrant_url, qdrant_api_key, collection_name, claude_api_key, voyage_api_key):
-        # Initialize Voyage AI client
-        self.voyage_client = VoyageAIClient(voyage_api_key)
-        
-        # Initialize Claude client
-        self.claude_client = ClaudeClient(claude_api_key)
-        
-        # Initialize Qdrant search
-        self.qdrant_search = QdrantSearch(qdrant_url, qdrant_api_key, collection_name)
-    
-    def process_query(self, query: str, use_reranking: bool = True, top_k: int = 5) -> str:
-        """
-        Process a user query through the complete RAG pipeline.
-        
-        Args:
-            query: The user's question
-            use_reranking: Whether to use reranking
-            top_k: Number of documents to retrieve
-            
-        Returns:
-            Generated response
-        """
-        # Step 1: Generate embeddings for the query
-        dense_embedding, sparse_embedding = self.voyage_client.create_embeddings(query)
-        
-        if not dense_embedding:
-            return "Failed to generate embeddings for your query. Please try again."
-        
-        # Step 2: Perform hybrid search in Qdrant
-        search_results = self.qdrant_search.hybrid_search(
-            dense_vector=dense_embedding,
-            sparse_vector=sparse_embedding,
-            limit=top_k
-        )
-        
-        if not search_results:
-            return "No relevant documents found to answer your question."
-        
-        # Extract document texts from search results
-        documents = [result.payload.get("text", "") for result in search_results if "text" in result.payload]
-        
-        # Step 3: Optionally rerank documents
-        if use_reranking and len(documents) > 1:
-            reranked_results = self.voyage_client.rerank_documents(query, documents)
-            if reranked_results:
-                # Get the reranked document texts in the new order
-                documents = [documents[result['index']] for result in reranked_results]
-        
-        # Step 4: Generate response with Claude
-        response = self.claude_client.generate_response(query, documents)
-        
-        return response
+            # Restore original proxy settings
+            if orig_http_proxy:

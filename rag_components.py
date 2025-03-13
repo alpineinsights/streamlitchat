@@ -4,13 +4,14 @@ import streamlit as st
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
+from datetime import datetime
 
 # Voyage AI model configurations
-VOYAGE_EMBEDDING_MODEL = "voyage-large-2"  # Default model, can be overridden
+VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Updated to finance-specific model
 VOYAGE_RERANKER_MODEL = "rerank-2"  # Latest reranker model
 
 # Claude model configuration
-CLAUDE_MODEL = "claude-3-7-sonnet-20240229"
+CLAUDE_MODEL = "claude-3-5-sonnet-20240620"  # Updated to the latest Claude model
 
 class VoyageAIClient:
     """Client for Voyage AI embedding and reranking services."""
@@ -25,27 +26,30 @@ class VoyageAIClient:
             "Authorization": f"Bearer {self.api_key}"
         }
     
-    def create_embeddings(self, text: str, model: str = VOYAGE_EMBEDDING_MODEL, output_type: str = "dense") -> Tuple[List[float], List[Tuple[int, float]]]:
+    def create_embeddings(self, text: str, model: str = VOYAGE_EMBEDDING_MODEL, output_type: str = "hybrid") -> Tuple[List[float], List[Tuple[int, float]]]:
         """
         Generate embeddings using Voyage AI.
-        
         Args:
             text: The input text to embed
-            model: The embedding model to use (voyage-large-2, voyage-finance-2, etc.)
+            model: The embedding model to use (voyage-finance-2, voyage-large-2, etc.)
             output_type: Type of embedding to generate ('hybrid', 'dense', or 'sparse')
-            
         Returns:
             Tuple of (dense_embedding, sparse_embedding)
         """
         # Prepare the request payload
         payload = {
             "model": model,
-            "input": text
+            "input": text,
+            "input_type": "document"  # Specify document type for better finance context handling
         }
         
         # Only add output_type for hybrid requests with models that support it
         if output_type == "hybrid" and "finance" not in model:
             payload["output_type"] = "hybrid"
+        elif output_type == "hybrid" and model == "voyage-finance-2":
+            # Special handling for voyage-finance-2 which requires separate calls
+            # for dense and sparse vectors
+            return self._create_finance_hybrid_embeddings(text, model)
         
         try:
             # Make the request to the Voyage API
@@ -79,23 +83,78 @@ class VoyageAIClient:
                 sparse_embedding = list(zip(indices, values))
             
             return dense_embedding, sparse_embedding
-            
+        
         except Exception as e:
             st.error(f"Error generating embeddings: {str(e)}")
             if 'response' in locals() and hasattr(response, 'text'):
                 st.error(f"API response: {response.text}")
             return [], []
     
+    def _create_finance_hybrid_embeddings(self, text: str, model: str = "voyage-finance-2") -> Tuple[List[float], List[Tuple[int, float]]]:
+        """
+        Create both dense and sparse embeddings for finance model through separate API calls
+        """
+        # Dense embeddings
+        dense_payload = {
+            "model": model,
+            "input": text,
+            "input_type": "document"
+        }
+        
+        # Sparse embeddings 
+        sparse_payload = {
+            "model": model,
+            "input": text,
+            "input_type": "document",
+            "output_type": "sparse"
+        }
+        
+        try:
+            # Get dense embeddings
+            dense_response = requests.post(
+                self.embedding_endpoint,
+                headers=self.headers,
+                json=dense_payload
+            )
+            
+            if not dense_response.ok:
+                st.error(f"Dense embedding error: {dense_response.status_code}")
+                return [], []
+            
+            dense_data = dense_response.json()
+            dense_embedding = dense_data['data'][0]['embedding']
+            
+            # Get sparse embeddings
+            sparse_response = requests.post(
+                self.embedding_endpoint,
+                headers=self.headers,
+                json=sparse_payload
+            )
+            
+            if not sparse_response.ok:
+                st.error(f"Sparse embedding error: {sparse_response.status_code}")
+                return dense_embedding, []
+            
+            sparse_data = sparse_response.json()
+            sparse_result = sparse_data['data'][0]['sparse_embedding']
+            indices = sparse_result['indices']
+            values = sparse_result['values']
+            sparse_embedding = list(zip(indices, values))
+            
+            return dense_embedding, sparse_embedding
+            
+        except Exception as e:
+            st.error(f"Error in finance hybrid embeddings: {str(e)}")
+            return [], []
+    
     def rerank_documents(self, query: str, documents: List[str], model: str = VOYAGE_RERANKER_MODEL, top_n: int = 5) -> List[Dict[str, Any]]:
         """
         Rerank a list of documents based on relevance to the query.
-        
         Args:
             query: The search query
             documents: List of document texts to rerank
             model: The reranking model to use
             top_n: Number of top results to return
-            
         Returns:
             List of reranked documents with scores
         """
@@ -126,9 +185,8 @@ class VoyageAIClient:
             
             # Parse the response
             data = response.json()
-            
             return data['results']
-            
+        
         except Exception as e:
             st.error(f"Error reranking documents: {str(e)}")
             if 'response' in locals() and hasattr(response, 'text'):
@@ -152,23 +210,22 @@ class ClaudeClient:
     def generate_response(self, query: str, contexts: List[str], system_prompt: str = None) -> str:
         """
         Generate a response using Claude based on the query and retrieved contexts.
-        
         Args:
             query: The user's question
             contexts: List of retrieved document texts
             system_prompt: Optional system prompt to customize Claude's behavior
-            
         Returns:
             Claude's response
         """
         # Create combined context
         combined_contexts = "\n\n".join([f"DOCUMENT: {context}" for context in contexts])
         
-        # If no system prompt is provided, use a default one
+        # If no system prompt is provided, use a default one focused on financial information
         if system_prompt is None:
-            system_prompt = """You are a helpful AI assistant. Answer the user's question based on the provided context. 
+            system_prompt = """You are a helpful financial AI assistant. Answer the user's question based on the provided context.
 If the answer cannot be found in the context, say "I don't have enough information to answer that question."
-Keep your answers concise and to the point."""
+Pay special attention to financial metrics, numbers, and relationships in the data.
+Keep your answers concise, precise, and to the point."""
         
         # Prepare the request payload
         payload = {
@@ -178,8 +235,7 @@ Keep your answers concise and to the point."""
             "messages": [
                 {
                     "role": "user",
-                    "content": f"""Here are some relevant documents to help answer the question:
-
+                    "content": f"""Here are some relevant financial documents to help answer the question:
 {combined_contexts}
 
 Based on the above documents, please answer this question: {query}"""
@@ -226,7 +282,7 @@ Based on the above documents, please answer this question: {query}"""
             
             # Extract the response text
             return data['content'][0]['text']
-            
+        
         except Exception as e:
             st.error(f"Error generating Claude response: {str(e)}")
             if 'response' in locals() and hasattr(response, 'text'):
@@ -241,18 +297,16 @@ class QdrantSearch:
         self.client = QdrantClient(url=url, api_key=api_key)
         self.collection_name = collection_name
     
-    def hybrid_search(self, 
-                      dense_vector: List[float], 
-                      sparse_vector: List[Tuple[int, float]], 
-                      limit: int = 5) -> List[Dict[str, Any]]:
+    def hybrid_search(self,
+                     dense_vector: List[float],
+                     sparse_vector: List[Tuple[int, float]],
+                     limit: int = 5) -> List[Dict[str, Any]]:
         """
-        Perform search using dense vectors only if sparse vectors aren't available.
-        
+        Perform hybrid search using both dense and sparse vectors.
         Args:
-            dense_vector: Dense embedding vector
-            sparse_vector: Sparse embedding as list of (index, value) tuples
+            dense_vector: Dense embedding vector (1024 dimensions)
+            sparse_vector: Sparse embedding as list of (index, value) tuples (100 dimensions)
             limit: Maximum number of results to return
-            
         Returns:
             List of search results
         """
@@ -276,8 +330,8 @@ class QdrantSearch:
                     values=list(values),
                 )
             
-            # Perform the search using the newer query API
-            results = self.client.query(
+            # Use search instead of query method to fix the error
+            results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
                 limit=limit,
@@ -285,7 +339,6 @@ class QdrantSearch:
             )
             
             return results
-            
         except Exception as e:
             st.error(f"Error searching Qdrant: {str(e)}")
             return []
@@ -304,12 +357,11 @@ class RAGChatbot:
         # Initialize Qdrant search
         self.qdrant_search = QdrantSearch(qdrant_url, qdrant_api_key, collection_name)
     
-    def process_query(self, query: str, embedding_model: str = VOYAGE_EMBEDDING_MODEL, 
-                     output_type: str = "dense", use_reranking: bool = True, 
+    def process_query(self, query: str, embedding_model: str = VOYAGE_EMBEDDING_MODEL,
+                     output_type: str = "hybrid", use_reranking: bool = True,
                      reranker_model: str = VOYAGE_RERANKER_MODEL, top_k: int = 5) -> str:
         """
         Process a user query through the complete RAG pipeline.
-        
         Args:
             query: The user's question
             embedding_model: The model to use for generating embeddings
@@ -317,7 +369,6 @@ class RAGChatbot:
             use_reranking: Whether to use reranking
             reranker_model: The model to use for reranking
             top_k: Number of documents to retrieve
-            
         Returns:
             Generated response
         """
@@ -350,11 +401,11 @@ class RAGChatbot:
             reranked_results = self.voyage_client.rerank_documents(
                 query, documents, model=reranker_model, top_n=top_k
             )
+            
             if reranked_results:
                 # Get the reranked document texts in the new order
                 documents = [documents[result['index']] for result in reranked_results]
         
         # Step 4: Generate response with Claude
         response = self.claude_client.generate_response(query, documents)
-        
         return response

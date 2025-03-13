@@ -257,6 +257,11 @@ class QdrantSearch:
             List of search results
         """
         try:
+            search_params = models.SearchParams(
+                hnsw_ef=128,
+                exact=False
+            )
+            
             # Determine if we can use hybrid search or need to use dense-only
             if sparse_vector:
                 # Convert sparse vector to the format Qdrant expects
@@ -266,22 +271,18 @@ class QdrantSearch:
                     values=list(values),
                 )
                 
-                # Create hybrid query vector
-                query_vector = models.HybridVector(
-                    dense=dense_vector,
-                    sparse=sparse_vec
-                )
+                # Create named vector query for hybrid search
+                query_vector = {
+                    "dense": dense_vector,
+                    "sparse": sparse_vec
+                }
             else:
-                # Use dense vector only
-                query_vector = dense_vector
+                # Use dense vector only with proper named vector
+                query_vector = {
+                    "dense": dense_vector
+                }
             
-            # Create search params
-            search_params = models.SearchParams(
-                hnsw_ef=128,
-                exact=False
-            )
-            
-            # Perform the search
+            # Perform the search with named vectors
             results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,

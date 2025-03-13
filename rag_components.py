@@ -1,6 +1,7 @@
 import requests
 import anthropic
 import streamlit as st
+import os
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
@@ -106,8 +107,26 @@ class ClaudeClient:
     """Client for Claude AI completions."""
     
     def __init__(self, api_key: str):
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = CLAUDE_MODEL
+        # Store original proxy settings
+        original_http_proxy = os.environ.pop('HTTP_PROXY', None)
+        original_https_proxy = os.environ.pop('HTTPS_PROXY', None)
+        original_http_proxy_lower = os.environ.pop('http_proxy', None)
+        original_https_proxy_lower = os.environ.pop('https_proxy', None)
+        
+        try:
+            # Initialize client without proxy settings
+            self.client = anthropic.Anthropic(api_key=api_key)
+            self.model = CLAUDE_MODEL
+        finally:
+            # Restore original proxy settings
+            if original_http_proxy:
+                os.environ['HTTP_PROXY'] = original_http_proxy
+            if original_https_proxy:
+                os.environ['HTTPS_PROXY'] = original_https_proxy
+            if original_http_proxy_lower:
+                os.environ['http_proxy'] = original_http_proxy_lower
+            if original_https_proxy_lower:
+                os.environ['https_proxy'] = original_https_proxy_lower
     
     def generate_response(self, query: str, contexts: List[str], system_prompt: str = None) -> str:
         """

@@ -6,8 +6,8 @@ from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
 
 # Voyage AI model configurations
-VOYAGE_EMBEDDING_MODEL = "voyage-large-2"
-VOYAGE_RERANKER_MODEL = "voyage-reranker-v1"
+VOYAGE_EMBEDDING_MODEL = "voyage-large-2"  # Default model, can be overridden
+VOYAGE_RERANKER_MODEL = "rerank-2"  # Latest reranker model
 
 # Claude model configuration
 CLAUDE_MODEL = "claude-3-7-sonnet-20240229"
@@ -16,6 +16,7 @@ class VoyageAIClient:
     """Client for Voyage AI embedding and reranking services."""
     
     def __init__(self, api_key: str):
+        """Initialize the Voyage AI client with API key."""
         self.api_key = api_key
         self.embedding_endpoint = "https://api.voyageai.com/v1/embeddings"
         self.reranking_endpoint = "https://api.voyageai.com/v1/rerank"
@@ -24,38 +25,54 @@ class VoyageAIClient:
             "Authorization": f"Bearer {self.api_key}"
         }
     
-    def create_embeddings(self, text: str, model: str = VOYAGE_EMBEDDING_MODEL) -> Tuple[List[float], List[Tuple[int, float]]]:
+    def create_embeddings(self, text: str, model: str = VOYAGE_EMBEDDING_MODEL, output_type: str = "dense") -> Tuple[List[float], List[Tuple[int, float]]]:
         """
-        Generate both dense and sparse embeddings using Voyage AI.
+        Generate embeddings using Voyage AI.
         
         Args:
             text: The input text to embed
-            model: The embedding model to use
+            model: The embedding model to use (voyage-large-2, voyage-finance-2, etc.)
+            output_type: Type of embedding to generate ('hybrid', 'dense', or 'sparse')
             
         Returns:
             Tuple of (dense_embedding, sparse_embedding)
         """
+        # Prepare the request payload
         payload = {
             "model": model,
-            "input": text,
-            "output_type": "hybrid"  # Request both dense and sparse embeddings
+            "input": text
         }
         
+        # Only add output_type for hybrid requests with models that support it
+        if output_type == "hybrid" and "finance" not in model:
+            payload["output_type"] = "hybrid"
+        
         try:
+            # Make the request to the Voyage API
             response = requests.post(
                 self.embedding_endpoint,
                 headers=self.headers,
                 json=payload
             )
-            response.raise_for_status()
+            
+            # Check for errors
+            if not response.ok:
+                try:
+                    error_detail = response.json()
+                except:
+                    error_detail = response.text
+                st.error(f"Embedding API error: {response.status_code} - {error_detail}")
+                return [], []
+            
+            # Parse the response
             data = response.json()
             
             # Extract dense embedding vector
             dense_embedding = data['data'][0]['embedding']
             
-            # Extract sparse embedding (indices and values)
+            # Extract sparse embedding (indices and values) if available
             sparse_embedding = []
-            if 'sparse_embedding' in data['data'][0]:
+            if output_type == "hybrid" and 'sparse_embedding' in data['data'][0]:
                 sparse_data = data['data'][0]['sparse_embedding']
                 indices = sparse_data['indices']
                 values = sparse_data['values']
@@ -65,6 +82,8 @@ class VoyageAIClient:
             
         except Exception as e:
             st.error(f"Error generating embeddings: {str(e)}")
+            if 'response' in locals() and hasattr(response, 'text'):
+                st.error(f"API response: {response.text}")
             return [], []
     
     def rerank_documents(self, query: str, documents: List[str], model: str = VOYAGE_RERANKER_MODEL, top_n: int = 5) -> List[Dict[str, Any]]:
@@ -80,6 +99,7 @@ class VoyageAIClient:
         Returns:
             List of reranked documents with scores
         """
+        # Prepare the request payload
         payload = {
             "model": model,
             "query": query,
@@ -88,24 +108,38 @@ class VoyageAIClient:
         }
         
         try:
+            # Make the request to the Voyage API
             response = requests.post(
                 self.reranking_endpoint,
                 headers=self.headers,
                 json=payload
             )
-            response.raise_for_status()
+            
+            # Check for errors
+            if not response.ok:
+                try:
+                    error_detail = response.json()
+                except:
+                    error_detail = response.text
+                st.error(f"Reranking API error: {response.status_code} - {error_detail}")
+                return []
+            
+            # Parse the response
             data = response.json()
             
             return data['results']
             
         except Exception as e:
             st.error(f"Error reranking documents: {str(e)}")
+            if 'response' in locals() and hasattr(response, 'text'):
+                st.error(f"API response: {response.text}")
             return []
 
 class ClaudeClient:
     """Client for Claude AI completions using direct API calls."""
     
     def __init__(self, api_key: str):
+        """Initialize the Claude client with API key."""
         self.api_key = api_key
         self.model = CLAUDE_MODEL
         self.base_url = "https://api.anthropic.com/v1/messages"
@@ -178,7 +212,16 @@ Based on the above documents, please answer this question: {query}"""
             if orig_https_proxy_lower:
                 os.environ['https_proxy'] = orig_https_proxy_lower
             
-            response.raise_for_status()
+            # Check for errors
+            if not response.ok:
+                try:
+                    error_detail = response.json()
+                except:
+                    error_detail = response.text
+                st.error(f"Claude API error: {response.status_code} - {error_detail}")
+                return f"I apologize, but I encountered an error generating a response: {error_detail}"
+            
+            # Parse the response
             data = response.json()
             
             # Extract the response text
@@ -186,12 +229,15 @@ Based on the above documents, please answer this question: {query}"""
             
         except Exception as e:
             st.error(f"Error generating Claude response: {str(e)}")
+            if 'response' in locals() and hasattr(response, 'text'):
+                st.error(f"API response: {response.text}")
             return f"I apologize, but I encountered an error generating a response: {str(e)}"
 
 class QdrantSearch:
     """Handles search operations with Qdrant."""
     
     def __init__(self, url: str, api_key: str, collection_name: str):
+        """Initialize the Qdrant search client."""
         self.client = QdrantClient(url=url, api_key=api_key)
         self.collection_name = collection_name
     
@@ -200,7 +246,7 @@ class QdrantSearch:
                       sparse_vector: List[Tuple[int, float]], 
                       limit: int = 5) -> List[Dict[str, Any]]:
         """
-        Perform hybrid search using both dense and sparse vectors.
+        Perform search using dense vectors only if sparse vectors aren't available.
         
         Args:
             dense_vector: Dense embedding vector
@@ -210,25 +256,35 @@ class QdrantSearch:
         Returns:
             List of search results
         """
-        # Convert sparse vector to the format Qdrant expects
-        indices, values = zip(*sparse_vector) if sparse_vector else ([], [])
-        
-        # Create search request with hybrid search
-        search_params = models.SearchParams(
-            hnsw_ef=128,
-            exact=False
-        )
-        
         try:
+            # Determine if we can use hybrid search or need to use dense-only
+            if sparse_vector:
+                # Convert sparse vector to the format Qdrant expects
+                indices, values = zip(*sparse_vector)
+                sparse_vec = models.SparseVector(
+                    indices=list(indices),
+                    values=list(values),
+                )
+                
+                # Create hybrid query vector
+                query_vector = models.HybridVector(
+                    dense=dense_vector,
+                    sparse=sparse_vec
+                )
+            else:
+                # Use dense vector only
+                query_vector = dense_vector
+            
+            # Create search params
+            search_params = models.SearchParams(
+                hnsw_ef=128,
+                exact=False
+            )
+            
+            # Perform the search
             results = self.client.search(
                 collection_name=self.collection_name,
-                query_vector=models.HybridVector(
-                    dense=dense_vector,
-                    sparse=models.SparseVector(
-                        indices=list(indices),
-                        values=list(values),
-                    ) if sparse_vector else None
-                ),
+                query_vector=query_vector,
                 search_params=search_params,
                 limit=limit,
                 with_payload=True
@@ -244,6 +300,7 @@ class RAGChatbot:
     """RAG Chatbot combining all components."""
     
     def __init__(self, qdrant_url, qdrant_api_key, collection_name, claude_api_key, voyage_api_key):
+        """Initialize all components of the RAG chatbot."""
         # Initialize Voyage AI client
         self.voyage_client = VoyageAIClient(voyage_api_key)
         
@@ -253,25 +310,32 @@ class RAGChatbot:
         # Initialize Qdrant search
         self.qdrant_search = QdrantSearch(qdrant_url, qdrant_api_key, collection_name)
     
-    def process_query(self, query: str, use_reranking: bool = True, top_k: int = 5) -> str:
+    def process_query(self, query: str, embedding_model: str = VOYAGE_EMBEDDING_MODEL, 
+                     output_type: str = "dense", use_reranking: bool = True, 
+                     reranker_model: str = VOYAGE_RERANKER_MODEL, top_k: int = 5) -> str:
         """
         Process a user query through the complete RAG pipeline.
         
         Args:
             query: The user's question
+            embedding_model: The model to use for generating embeddings
+            output_type: Type of embedding to generate ('hybrid', 'dense', or 'sparse')
             use_reranking: Whether to use reranking
+            reranker_model: The model to use for reranking
             top_k: Number of documents to retrieve
             
         Returns:
             Generated response
         """
         # Step 1: Generate embeddings for the query
-        dense_embedding, sparse_embedding = self.voyage_client.create_embeddings(query)
+        dense_embedding, sparse_embedding = self.voyage_client.create_embeddings(
+            query, model=embedding_model, output_type=output_type
+        )
         
         if not dense_embedding:
             return "Failed to generate embeddings for your query. Please try again."
         
-        # Step 2: Perform hybrid search in Qdrant
+        # Step 2: Perform search in Qdrant
         search_results = self.qdrant_search.hybrid_search(
             dense_vector=dense_embedding,
             sparse_vector=sparse_embedding,
@@ -284,9 +348,14 @@ class RAGChatbot:
         # Extract document texts from search results
         documents = [result.payload.get("text", "") for result in search_results if "text" in result.payload]
         
+        if not documents:
+            return "Found results, but they don't contain text fields. Check your Qdrant collection structure."
+        
         # Step 3: Optionally rerank documents
         if use_reranking and len(documents) > 1:
-            reranked_results = self.voyage_client.rerank_documents(query, documents)
+            reranked_results = self.voyage_client.rerank_documents(
+                query, documents, model=reranker_model, top_n=top_k
+            )
             if reranked_results:
                 # Get the reranked document texts in the new order
                 documents = [documents[result['index']] for result in reranked_results]

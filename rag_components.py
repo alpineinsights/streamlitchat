@@ -140,58 +140,6 @@ class VoyageAIClient:
                 st.error(f"API response: {response.text}")
             return []
 
-class OpenAIClient:
-    """Client for OpenAI GPT-4o completions."""
-    
-    def __init__(self, api_key: str):
-        """Initialize the OpenAI client with API key."""
-        self.api_key = api_key
-        self.model = OPENAI_MODEL
-        self.client = OpenAI(api_key=api_key)
-    
-    def generate_response(self, query: str, contexts: List[str], system_prompt: str = None) -> str:
-        """
-        Generate a response using OpenAI GPT-4o based on the query and retrieved contexts.
-        
-        Args:
-            query: The user's question
-            contexts: List of retrieved document texts
-            system_prompt: Optional system prompt to customize the model's behavior
-            
-        Returns:
-            OpenAI's response
-        """
-        # Create combined context
-        combined_contexts = "\n\n".join([f"DOCUMENT: {context}" for context in contexts])
-        
-        # If no system prompt is provided, use a default one
-        if system_prompt is None:
-            system_prompt = """You are a helpful AI assistant. Answer the user's question based on the provided context.
-            If the answer cannot be found in the context, say "I don't have enough information to answer that question."
-            Keep your answers concise and to the point."""
-        
-        try:
-            # Make the request to the OpenAI API
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"""Here are some relevant documents to help answer the question:
-
-{combined_contexts}
-
-Based on the above documents, please answer this question: {query}"""}
-                ],
-                max_tokens=1024
-            )
-            
-            # Extract the response text
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            st.error(f"Error generating OpenAI response: {str(e)}")
-            return f"I apologize, but I encountered an error generating a response: {str(e)}"
-
 class QdrantSearch:
     """Handles search operations with Qdrant."""
     
@@ -287,6 +235,58 @@ class QdrantSearch:
             st.error(f"Error searching Qdrant: {str(e)}")
             return []
 
+class OpenAIClient:
+    """Client for OpenAI GPT-4o completions."""
+    
+    def __init__(self, api_key: str):
+        """Initialize the OpenAI client with API key."""
+        self.api_key = api_key
+        self.model = OPENAI_MODEL
+        self.client = OpenAI(api_key=api_key)
+    
+    def generate_response(self, query: str, contexts: List[str], system_prompt: str = None) -> str:
+        """
+        Generate a response using OpenAI GPT-4o based on the query and retrieved contexts.
+        
+        Args:
+            query: The user's question
+            contexts: List of retrieved document texts
+            system_prompt: Optional system prompt to customize the model's behavior
+            
+        Returns:
+            OpenAI's response
+        """
+        # Create combined context
+        combined_contexts = "\n\n".join([f"DOCUMENT: {context}" for context in contexts])
+        
+        # If no system prompt is provided, use a default one
+        if system_prompt is None:
+            system_prompt = """You are a helpful AI assistant. Answer the user's question based on the provided context.
+            If the answer cannot be found in the context, say "I don't have enough information to answer that question."
+            Keep your answers concise and to the point."""
+        
+        try:
+            # Make the request to the OpenAI API
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"""Here are some relevant documents to help answer the question:
+
+{combined_contexts}
+
+Based on the above documents, please answer this question: {query}"""}
+                ],
+                max_tokens=1024
+            )
+            
+            # Extract the response text
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            st.error(f"Error generating OpenAI response: {str(e)}")
+            return f"I apologize, but I encountered an error generating a response: {str(e)}"
+
 class RAGChatbot:
     """RAG Chatbot combining all components."""
     
@@ -343,7 +343,7 @@ class RAGChatbot:
             if not search_results:
                 return "No relevant documents found to answer your question."
             
-            # Step 3: Extract document texts from search results - Looking for chunk_text field
+            # Step 3: Extract document texts from search results
             documents = [result.payload.get("chunk_text", "") for result in search_results if "chunk_text" in result.payload]
             
             # Try alternative field names if no chunk_text is found
@@ -367,8 +367,8 @@ class RAGChatbot:
                     # Get the reranked document texts in the new order
                     documents = [documents[result['index']] for result in reranked_results]
             
-            # Step 5: Generate response with OpenAI GPT-4o
-            st.info("Generating response with GPT-4o...")
+            # Step 5: Generate response with OpenAI
+            st.info("Generating response with OpenAI...")
             response = self.openai_client.generate_response(query, documents)
             return response
             

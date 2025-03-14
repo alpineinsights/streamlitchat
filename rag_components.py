@@ -247,7 +247,7 @@ class QdrantSearch:
     
     def hybrid_search(self, dense_vector: List[float], 
                       sparse_vector: List[Tuple[int, float]], 
-                      limit: int = 5, 
+                      limit: int = 5,
                       filter_params: Optional[dict] = None) -> List[Dict[str, Any]]:
         """
         Perform hybrid search using Qdrant's Query API with RRF fusion.
@@ -388,24 +388,31 @@ class RAGChatbot:
             if not search_results:
                 return "No relevant documents found to answer your question."
             
-            # Extract document texts from search results
-            documents = [result.payload.get("text", "") for result in search_results if "text" in result.payload]
+            # Step 3: Extract document texts from search results - MODIFIED LINE
+            documents = [result.payload.get("chunk_text", "") for result in search_results if "chunk_text" in result.payload]
+            
+            # Try alternative field names if no chunk_text is found
+            if not documents:
+                for field in ["text", "content", "document"]:
+                    documents = [result.payload.get(field, "") for result in search_results if field in result.payload]
+                    if documents:
+                        break
             
             if not documents:
                 return "Found results, but they don't contain text fields. Check your Qdrant collection structure."
             
-            # Step 3: Optionally rerank documents
+            # Step 4: Optionally rerank documents
             if use_reranking and len(documents) > 1:
                 st.info("Reranking documents...")
                 reranked_results = self.voyage_client.rerank_documents(
-                    query, documents, model=reranker_model, top_k=top_k
+                    query, documents, model=reranker_model, top_k=top_k  # Note: using top_k instead of top_n
                 )
                 
                 if reranked_results:
                     # Get the reranked document texts in the new order
                     documents = [documents[result['index']] for result in reranked_results]
             
-            # Step 4: Generate response with Claude
+            # Step 5: Generate response with Claude
             st.info("Generating response...")
             response = self.claude_client.generate_response(query, documents)
             return response

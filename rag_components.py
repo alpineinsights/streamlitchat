@@ -4,13 +4,14 @@ import streamlit as st
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
+from openai import OpenAI
 
 # Voyage AI model configurations
 VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Default model, can be overridden
 VOYAGE_RERANKER_MODEL = "rerank-2"  # Latest reranker model
 
-# Claude model configuration
-CLAUDE_MODEL = "claude-3-7-sonnet-20240229"
+# OpenAI model configuration
+OPENAI_MODEL = "gpt-4o"
 
 class VoyageAIClient:
     """Client for Voyage AI embedding and reranking services."""
@@ -129,9 +130,9 @@ class VoyageAIClient:
                 st.error(f"Reranking API error: {response.status_code} - {error_detail}")
                 return []
                 
-            # Parse the response
+            # Parse the response - Note: Voyage API uses 'data' field, not 'results'
             data = response.json()
-            return data['results']
+            return data['data']
             
         except Exception as e:
             st.error(f"Error reranking documents: {str(e)}")
@@ -139,31 +140,26 @@ class VoyageAIClient:
                 st.error(f"API response: {response.text}")
             return []
 
-class ClaudeClient:
-    """Client for Claude AI completions using direct API calls."""
+class OpenAIClient:
+    """Client for OpenAI GPT-4o completions."""
     
     def __init__(self, api_key: str):
-        """Initialize the Claude client with API key."""
+        """Initialize the OpenAI client with API key."""
         self.api_key = api_key
-        self.model = CLAUDE_MODEL
-        self.base_url = "https://api.anthropic.com/v1/messages"
-        self.headers = {
-            "Content-Type": "application/json",
-            "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01"
-        }
+        self.model = OPENAI_MODEL
+        self.client = OpenAI(api_key=api_key)
     
     def generate_response(self, query: str, contexts: List[str], system_prompt: str = None) -> str:
         """
-        Generate a response using Claude based on the query and retrieved contexts.
+        Generate a response using OpenAI GPT-4o based on the query and retrieved contexts.
         
         Args:
             query: The user's question
             contexts: List of retrieved document texts
-            system_prompt: Optional system prompt to customize Claude's behavior
+            system_prompt: Optional system prompt to customize the model's behavior
             
         Returns:
-            Claude's response
+            OpenAI's response
         """
         # Create combined context
         combined_contexts = "\n\n".join([f"DOCUMENT: {context}" for context in contexts])
@@ -174,67 +170,26 @@ class ClaudeClient:
             If the answer cannot be found in the context, say "I don't have enough information to answer that question."
             Keep your answers concise and to the point."""
         
-        # Prepare the request payload
-        payload = {
-            "model": self.model,
-            "system": system_prompt,
-            "max_tokens": 1024,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": f"""Here are some relevant documents to help answer the question:
+        try:
+            # Make the request to the OpenAI API
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"""Here are some relevant documents to help answer the question:
 
 {combined_contexts}
 
-Based on the above documents, please answer this question: {query}"""
-                }
-            ]
-        }
-        
-        try:
-            # Store original proxy settings
-            orig_http_proxy = os.environ.pop('HTTP_PROXY', None)
-            orig_https_proxy = os.environ.pop('HTTPS_PROXY', None)
-            orig_http_proxy_lower = os.environ.pop('http_proxy', None)
-            orig_https_proxy_lower = os.environ.pop('https_proxy', None)
-            
-            # Make the API request with proxies explicitly disabled
-            response = requests.post(
-                self.base_url,
-                headers=self.headers,
-                json=payload,
-                proxies={"http": None, "https": None}
+Based on the above documents, please answer this question: {query}"""}
+                ],
+                max_tokens=1024
             )
             
-            # Restore original proxy settings
-            if orig_http_proxy:
-                os.environ['HTTP_PROXY'] = orig_http_proxy
-            if orig_https_proxy:
-                os.environ['HTTPS_PROXY'] = orig_https_proxy
-            if orig_http_proxy_lower:
-                os.environ['http_proxy'] = orig_http_proxy_lower
-            if orig_https_proxy_lower:
-                os.environ['https_proxy'] = orig_https_proxy_lower
-            
-            # Check for errors
-            if not response.ok:
-                try:
-                    error_detail = response.json()
-                except:
-                    error_detail = response.text
-                st.error(f"Claude API error: {response.status_code} - {error_detail}")
-                return f"I apologize, but I encountered an error generating a response: {error_detail}"
-            
-            # Parse the response
-            data = response.json()
-            
             # Extract the response text
-            return data['content'][0]['text']
+            return response.choices[0].message.content
             
         except Exception as e:
-            st.error(f"Error generating Claude response: {str(e)}")
-            if 'response' in locals() and hasattr(response, 'text'):
-                st.error(f"API response: {response.text}")
+            st.error(f"Error generating OpenAI response: {str(e)}")
             return f"I apologize, but I encountered an error generating a response: {str(e)}"
 
 class QdrantSearch:
@@ -335,13 +290,13 @@ class QdrantSearch:
 class RAGChatbot:
     """RAG Chatbot combining all components."""
     
-    def __init__(self, qdrant_url, qdrant_api_key, collection_name, claude_api_key, voyage_api_key):
+    def __init__(self, qdrant_url, qdrant_api_key, collection_name, openai_api_key, voyage_api_key):
         """Initialize all components of the RAG chatbot."""
         # Initialize Voyage AI client
         self.voyage_client = VoyageAIClient(voyage_api_key)
         
-        # Initialize Claude client
-        self.claude_client = ClaudeClient(claude_api_key)
+        # Initialize OpenAI client
+        self.openai_client = OpenAIClient(openai_api_key)
         
         # Initialize Qdrant search
         self.qdrant_search = QdrantSearch(qdrant_url, qdrant_api_key, collection_name)
@@ -388,7 +343,7 @@ class RAGChatbot:
             if not search_results:
                 return "No relevant documents found to answer your question."
             
-            # Step 3: Extract document texts from search results - MODIFIED LINE
+            # Step 3: Extract document texts from search results - Looking for chunk_text field
             documents = [result.payload.get("chunk_text", "") for result in search_results if "chunk_text" in result.payload]
             
             # Try alternative field names if no chunk_text is found
@@ -405,16 +360,16 @@ class RAGChatbot:
             if use_reranking and len(documents) > 1:
                 st.info("Reranking documents...")
                 reranked_results = self.voyage_client.rerank_documents(
-                    query, documents, model=reranker_model, top_k=top_k  # Note: using top_k instead of top_n
+                    query, documents, model=reranker_model, top_k=top_k
                 )
                 
                 if reranked_results:
                     # Get the reranked document texts in the new order
                     documents = [documents[result['index']] for result in reranked_results]
             
-            # Step 5: Generate response with Claude
-            st.info("Generating response...")
-            response = self.claude_client.generate_response(query, documents)
+            # Step 5: Generate response with OpenAI GPT-4o
+            st.info("Generating response with GPT-4o...")
+            response = self.openai_client.generate_response(query, documents)
             return response
             
         except Exception as e:

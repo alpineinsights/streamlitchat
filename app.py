@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-from rag_components import RAGChatbot, VOYAGE_EMBEDDING_MODEL, VOYAGE_RERANKER_MODEL
+from rag_components import RAGChatbot, VOYAGE_EMBEDDING_MODEL, VOYAGE_RERANKER_MODEL, OPENAI_MODEL
 
 # Set page configuration
 st.set_page_config(page_title="RAG Chatbot", page_icon="🤖", layout="wide")
@@ -11,19 +11,19 @@ QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.v0yhn
 COLLECTION_NAME = "documents" # Replace with your actual collection name
 
 # Get API keys from Streamlit secrets or environment variables
-CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"] if "CLAUDE_API_KEY" in st.secrets else os.environ.get("CLAUDE_API_KEY", "")
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets else os.environ.get("OPENAI_API_KEY", "")
 VOYAGE_API_KEY = st.secrets["VOYAGE_API_KEY"] if "VOYAGE_API_KEY" in st.secrets else os.environ.get("VOYAGE_API_KEY", "")
 
 # App title and description
-st.title("RAG Chatbot with Qdrant, Claude 3.7, and Voyage AI")
+st.title("RAG Chatbot with Qdrant, GPT-4o, and Voyage AI")
 st.markdown("""
 This chatbot uses hybrid search with dense and sparse embeddings from Voyage AI,
-retrieves relevant documents from Qdrant, and generates responses using Claude 3.7 Sonnet.
+retrieves relevant documents from Qdrant, and generates responses using OpenAI's GPT-4o.
 """)
 
 # Check for required API keys
-if not CLAUDE_API_KEY:
-    st.error("CLAUDE_API_KEY is missing. Please set it in Streamlit secrets or as an environment variable.")
+if not OPENAI_API_KEY:
+    st.error("OPENAI_API_KEY is missing. Please set it in Streamlit secrets or as an environment variable.")
     st.stop()
 
 if not VOYAGE_API_KEY:
@@ -37,7 +37,7 @@ def get_chatbot():
         qdrant_url=QDRANT_URL,
         qdrant_api_key=QDRANT_API_KEY,
         collection_name=COLLECTION_NAME,
-        claude_api_key=CLAUDE_API_KEY,
+        openai_api_key=OPENAI_API_KEY,
         voyage_api_key=VOYAGE_API_KEY
     )
 

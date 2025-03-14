@@ -1,6 +1,6 @@
 import streamlit as st
 import os
-from rag_components import RAGChatbot, VOYAGE_EMBEDDING_MODEL, VOYAGE_RERANKER_MODEL, OPENAI_MODEL
+from rag_components import RAGChatbot, VOYAGE_EMBEDDING_MODEL, VOYAGE_RERANKER_MODEL
 
 # Set page configuration
 st.set_page_config(page_title="RAG Chatbot", page_icon="🤖", layout="wide")
@@ -15,10 +15,10 @@ OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"] if "OPENAI_API_KEY" in st.secrets 
 VOYAGE_API_KEY = st.secrets["VOYAGE_API_KEY"] if "VOYAGE_API_KEY" in st.secrets else os.environ.get("VOYAGE_API_KEY", "")
 
 # App title and description
-st.title("RAG Chatbot with Qdrant, GPT-4o, and Voyage AI")
+st.title("RAG Chatbot with Qdrant, Claude 3.7, and Voyage AI")
 st.markdown("""
 This chatbot uses hybrid search with dense and sparse embeddings from Voyage AI,
-retrieves relevant documents from Qdrant, and generates responses using OpenAI's GPT-4o.
+retrieves relevant documents from Qdrant, and generates responses using Claude 3.7 Sonnet.
 """)
 
 # Check for required API keys

@@ -5,6 +5,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
 from openai import OpenAI
+from fastembed import TextEmbedding
+from fastembed.sparse import BM25Encoder
 
 # Voyage AI model configurations
 VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Default model, can be overridden
@@ -290,13 +292,60 @@ Based on the above documents, please answer this question: {query}"""}
             st.error(f"Error generating OpenAI response: {str(e)}")
             return f"I apologize, but I encountered an error generating a response: {str(e)}"
 
+class FastEmbedClient:
+    """Client for fastembed embeddings including BM25 sparse embeddings."""
+    
+    def __init__(self):
+        """Initialize the fastembed client."""
+        self.dense_embedding_model = TextEmbedding("intfloat/e5-small")
+        self.sparse_encoder = BM25Encoder()
+        
+    def create_embeddings(self, text: str, output_type: str = "dense") -> Tuple[List[float], List[Tuple[int, float]]]:
+        """
+        Generate embeddings using fastembed.
+        
+        Args:
+            text: The input text to embed
+            output_type: Type of embedding to generate ('hybrid', 'dense', or 'sparse')
+            
+        Returns:
+            Tuple of (dense_embedding, sparse_embedding)
+        """
+        try:
+            # Generate dense embedding
+            dense_embedding = []
+            if output_type in ["dense", "hybrid"]:
+                dense_embeddings = list(self.dense_embedding_model.embed([text]))
+                if dense_embeddings:
+                    dense_embedding = dense_embeddings[0].tolist()
+            
+            # Generate sparse embedding using BM25
+            sparse_embedding = []
+            if output_type in ["sparse", "hybrid"]:
+                sparse_vector = self.sparse_encoder.encode_documents([text])[0]
+                # Convert sparse vector to the expected format (list of (index, value) tuples)
+                indices = sparse_vector.indices.tolist()
+                values = sparse_vector.values.tolist()
+                sparse_embedding = list(zip(indices, values))
+                
+            return dense_embedding, sparse_embedding
+                
+        except Exception as e:
+            st.error(f"Error generating fastembed embeddings: {str(e)}")
+            return [], []
+
 class RAGChatbot:
     """RAG Chatbot combining all components."""
     
-    def __init__(self, qdrant_url, qdrant_api_key, collection_name, openai_api_key, voyage_api_key):
+    def __init__(self, qdrant_url, qdrant_api_key, collection_name, openai_api_key, voyage_api_key=None, use_fastembed=False):
         """Initialize all components of the RAG chatbot."""
-        # Initialize Voyage AI client
-        self.voyage_client = VoyageAIClient(voyage_api_key)
+        # Choose between VoyageAI or FastEmbed
+        if use_fastembed or not voyage_api_key:
+            self.embedding_client = FastEmbedClient()
+            self.use_fastembed = True
+        else:
+            self.voyage_client = VoyageAIClient(voyage_api_key)
+            self.use_fastembed = False
         
         # Initialize OpenAI client
         self.openai_client = OpenAIClient(openai_api_key)
@@ -312,10 +361,10 @@ class RAGChatbot:
         
         Args:
             query: The user's question
-            embedding_model: The model to use for generating embeddings
+            embedding_model: The model to use for generating embeddings (only for VoyageAI)
             output_type: Type of embedding to generate ('hybrid', 'dense', or 'sparse')
-            use_reranking: Whether to use reranking
-            reranker_model: The model to use for reranking
+            use_reranking: Whether to use reranking (only for VoyageAI)
+            reranker_model: The model to use for reranking (only for VoyageAI)
             top_k: Number of documents to retrieve
             
         Returns:
@@ -324,9 +373,14 @@ class RAGChatbot:
         try:
             # Step 1: Generate embeddings for the query
             st.info("Generating embeddings...")
-            dense_embedding, sparse_embedding = self.voyage_client.create_embeddings(
-                query, model=embedding_model, output_type=output_type
-            )
+            if self.use_fastembed:
+                dense_embedding, sparse_embedding = self.embedding_client.create_embeddings(
+                    query, output_type=output_type
+                )
+            else:
+                dense_embedding, sparse_embedding = self.voyage_client.create_embeddings(
+                    query, model=embedding_model, output_type=output_type
+                )
             
             if not dense_embedding:
                 return "Failed to generate dense embeddings for your query."

@@ -239,10 +239,15 @@ class QdrantSearch:
 class RAGChatbot:
     """RAG Chatbot combining all components."""
     
-    def __init__(self, qdrant_url, qdrant_api_key, collection_name, openai_api_key, voyage_api_key):
+    def __init__(self, qdrant_url, qdrant_api_key, collection_name, openai_api_key, voyage_api_key, use_fastembed=False):
         """Initialize all components of the RAG chatbot."""
-        # Initialize Voyage AI client
-        self.voyage_client = VoyageAIClient(voyage_api_key)
+        # Choose between VoyageAI or FastEmbed
+        if use_fastembed or not voyage_api_key:
+            self.embedding_client = FastEmbedClient()
+            self.use_fastembed = True
+        else:
+            self.voyage_client = VoyageAIClient(voyage_api_key)
+            self.use_fastembed = False
         
         # Initialize OpenAI client
         self.openai_client = OpenAIClient(openai_api_key)
@@ -270,9 +275,14 @@ class RAGChatbot:
         try:
             # Step 1: Generate embeddings for the query
             st.info("Generating embeddings...")
-            dense_embedding, sparse_embedding = self.voyage_client.create_embeddings(
-                query, model=embedding_model, output_type=output_type
-            )
+            if self.use_fastembed:
+                dense_embedding, sparse_embedding = self.embedding_client.create_embeddings(
+                    query, output_type=output_type
+                )
+            else:
+                dense_embedding, sparse_embedding = self.voyage_client.create_embeddings(
+                    query, model=embedding_model, output_type=output_type
+                )
             
             if not dense_embedding:
                 return "Failed to generate dense embeddings for your query."
@@ -335,6 +345,9 @@ qdrant_url = os.environ.get("QDRANT_URL", "")
 qdrant_api_key = os.environ.get("QDRANT_API_KEY", "")
 collection_name = os.environ.get("QDRANT_COLLECTION", "")
 
+# Add this to your initialization section
+use_fastembed = st.checkbox("Use FastEmbed with BM25 instead of Voyage AI", value=False)
+
 # Initialize session state for storing the chatbot and messages
 if 'chatbot' not in st.session_state:
     st.session_state.chatbot = None
@@ -349,7 +362,8 @@ if st.button("Initialize Chatbot"):
         qdrant_api_key=qdrant_api_key,
         collection_name=collection_name,
         openai_api_key=openai_api_key,
-        voyage_api_key=voyage_api_key
+        voyage_api_key=voyage_api_key,
+        use_fastembed=use_fastembed
     )
     st.success("Chatbot initialized successfully!")
 

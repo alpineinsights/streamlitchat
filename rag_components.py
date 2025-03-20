@@ -242,6 +242,9 @@ class OpenAIClient:
         """Initialize the OpenAI client with API key."""
         self.api_key = api_key
         self.model = OPENAI_MODEL
+        
+        # Fix for the proxies error - create client with just the API key
+        # This is compatible with newer versions of the OpenAI Python library
         self.client = OpenAI(api_key=api_key)
     
     def generate_response(self, query: str, contexts: List[str], system_prompt: str = None) -> str:

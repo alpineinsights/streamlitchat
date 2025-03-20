@@ -5,6 +5,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
 from openai import OpenAI
+from rag_components import VoyageAIClient, QdrantSearch, OpenAIClient, RAGChatbot, VOYAGE_EMBEDDING_MODEL, VOYAGE_RERANKER_MODEL
 
 # Voyage AI model configurations
 VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Default model, can be overridden
@@ -323,3 +324,28 @@ class RAGChatbot:
         except Exception as e:
             st.error(f"Error processing query: {str(e)}")
             return f"I encountered an error while processing your query: {str(e)}"
+
+# Set up your Streamlit application here
+st.title("RAG Chatbot with Voyage AI and OpenAI")
+
+# Example usage of the imported classes
+if st.button("Initialize Chatbot"):
+    # Get API keys (in a real app, use st.text_input or environment variables)
+    voyage_api_key = os.environ.get("VOYAGE_API_KEY", "")
+    openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+    qdrant_url = os.environ.get("QDRANT_URL", "")
+    qdrant_api_key = os.environ.get("QDRANT_API_KEY", "")
+    collection_name = os.environ.get("QDRANT_COLLECTION", "")
+    
+    # Initialize the chatbot
+    chatbot = RAGChatbot(
+        qdrant_url=qdrant_url,
+        qdrant_api_key=qdrant_api_key,
+        collection_name=collection_name,
+        openai_api_key=openai_api_key,
+        voyage_api_key=voyage_api_key
+    )
+    
+    st.success("Chatbot initialized successfully!")
+
+# Add your UI components and functionality here

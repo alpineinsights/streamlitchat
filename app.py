@@ -238,13 +238,13 @@ class QdrantSearch:
 class RAGChatbot:
     """RAG Chatbot combining all components."""
     
-    def __init__(self, qdrant_url, qdrant_api_key, collection_name, claude_api_key, voyage_api_key):
+    def __init__(self, qdrant_url, qdrant_api_key, collection_name, openai_api_key, voyage_api_key):
         """Initialize all components of the RAG chatbot."""
         # Initialize Voyage AI client
         self.voyage_client = VoyageAIClient(voyage_api_key)
         
-        # Initialize Claude client
-        self.claude_client = ClaudeClient(claude_api_key)
+        # Initialize OpenAI client
+        self.openai_client = OpenAIClient(openai_api_key)
         
         # Initialize Qdrant search
         self.qdrant_search = QdrantSearch(qdrant_url, qdrant_api_key, collection_name)
@@ -315,9 +315,9 @@ class RAGChatbot:
                     # Get the reranked document texts in the new order
                     documents = [documents[result['index']] for result in reranked_results]
             
-            # Step 5: Generate response with Claude
-            st.info("Generating response...")
-            response = self.claude_client.generate_response(query, documents)
+            # Step 5: Generate response with OpenAI
+            st.info("Generating response with OpenAI...")
+            response = self.openai_client.generate_response(query, documents)
             return response
             
         except Exception as e:

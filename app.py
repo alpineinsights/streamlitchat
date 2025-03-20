@@ -328,24 +328,52 @@ class RAGChatbot:
 # Set up your Streamlit application here
 st.title("RAG Chatbot with Voyage AI and OpenAI")
 
-# Example usage of the imported classes
+# Get API keys (in a real app, use st.text_input or environment variables)
+voyage_api_key = os.environ.get("VOYAGE_API_KEY", "")
+openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+qdrant_url = os.environ.get("QDRANT_URL", "")
+qdrant_api_key = os.environ.get("QDRANT_API_KEY", "")
+collection_name = os.environ.get("QDRANT_COLLECTION", "")
+
+# Initialize session state for storing the chatbot and messages
+if 'chatbot' not in st.session_state:
+    st.session_state.chatbot = None
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+
+# Button to initialize the chatbot
 if st.button("Initialize Chatbot"):
-    # Get API keys (in a real app, use st.text_input or environment variables)
-    voyage_api_key = os.environ.get("VOYAGE_API_KEY", "")
-    openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-    qdrant_url = os.environ.get("QDRANT_URL", "")
-    qdrant_api_key = os.environ.get("QDRANT_API_KEY", "")
-    collection_name = os.environ.get("QDRANT_COLLECTION", "")
-    
     # Initialize the chatbot
-    chatbot = RAGChatbot(
+    st.session_state.chatbot = RAGChatbot(
         qdrant_url=qdrant_url,
         qdrant_api_key=qdrant_api_key,
         collection_name=collection_name,
         openai_api_key=openai_api_key,
         voyage_api_key=voyage_api_key
     )
-    
     st.success("Chatbot initialized successfully!")
 
-# Add your UI components and functionality here
+# Display chat messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
+
+# Chat input field (only shown if chatbot is initialized)
+if st.session_state.chatbot:
+    prompt = st.chat_input("Ask something...")
+    if prompt:
+        # Add user message to chat history
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.write(prompt)
+            
+        # Get chatbot response
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                response = st.session_state.chatbot.process_query(prompt)
+                st.write(response)
+                
+                # Add bot response to chat history
+                st.session_state.messages.append({"role": "assistant", "content": response})

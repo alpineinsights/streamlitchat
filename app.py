@@ -335,45 +335,65 @@ class RAGChatbot:
             st.error(f"Error processing query: {str(e)}")
             return f"I encountered an error while processing your query: {str(e)}"
 
-# Set up your Streamlit application here
-st.title("RAG Chatbot with Voyage AI and OpenAI")
+# Set page configuration
+st.set_page_config(
+    page_title="RAG Chatbot",
+    page_icon="🤖",
+    layout="wide"
+)
 
-# Get API keys (in a real app, use st.text_input or environment variables)
+# Set up your Streamlit application
+st.title("RAG Chatbot with Voyage AI and OpenAI")
+st.write("This chatbot uses hybrid search (dense + sparse vectors) and reranking for optimal results.")
+
+# Get API keys from environment variables or use empty strings as defaults
 voyage_api_key = os.environ.get("VOYAGE_API_KEY", "")
 openai_api_key = os.environ.get("OPENAI_API_KEY", "")
 qdrant_url = os.environ.get("QDRANT_URL", "")
 qdrant_api_key = os.environ.get("QDRANT_API_KEY", "")
 collection_name = os.environ.get("QDRANT_COLLECTION", "")
 
-# Add this to your initialization section
-use_fastembed = st.checkbox("Use FastEmbed with BM25 instead of Voyage AI", value=False)
+# Sidebar for API keys
+with st.sidebar:
+    st.header("API Configuration")
+    voyage_api_key = st.text_input("Voyage AI API Key", type="password", value=voyage_api_key)
+    openai_api_key = st.text_input("OpenAI API Key", type="password", value=openai_api_key)
+    qdrant_url = st.text_input("Qdrant URL", value=qdrant_url)
+    qdrant_api_key = st.text_input("Qdrant API Key", type="password", value=qdrant_api_key)
+    collection_name = st.text_input("Qdrant Collection Name", value=collection_name)
 
-# Initialize session state for storing the chatbot and messages
-if 'chatbot' not in st.session_state:
-    st.session_state.chatbot = None
-if 'messages' not in st.session_state:
+# Initialize session state for storing messages
+if "messages" not in st.session_state:
     st.session_state.messages = []
+if "chatbot_initialized" not in st.session_state:
+    st.session_state.chatbot_initialized = False
 
 # Button to initialize the chatbot
 if st.button("Initialize Chatbot"):
-    # Initialize the chatbot
-    st.session_state.chatbot = RAGChatbot(
-        qdrant_url=qdrant_url,
-        qdrant_api_key=qdrant_api_key,
-        collection_name=collection_name,
-        openai_api_key=openai_api_key,
-        voyage_api_key=voyage_api_key,
-        use_fastembed=use_fastembed
-    )
-    st.success("Chatbot initialized successfully!")
+    if all([voyage_api_key, openai_api_key, qdrant_url, qdrant_api_key, collection_name]):
+        try:
+            # Initialize the RAGChatbot
+            st.session_state.chatbot = RAGChatbot(
+                qdrant_url=qdrant_url,
+                qdrant_api_key=qdrant_api_key,
+                collection_name=collection_name,
+                openai_api_key=openai_api_key,
+                voyage_api_key=voyage_api_key
+            )
+            st.session_state.chatbot_initialized = True
+            st.success("Chatbot initialized successfully!")
+        except Exception as e:
+            st.error(f"Error initializing chatbot: {str(e)}")
+    else:
+        st.error("Please provide all required API keys and configuration in the sidebar.")
 
 # Display chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.write(message["content"])
+        st.markdown(message["content"])
 
 # Chat input field (only shown if chatbot is initialized)
-if st.session_state.chatbot:
+if st.session_state.chatbot_initialized:
     prompt = st.chat_input("Ask something...")
     if prompt:
         # Add user message to chat history
@@ -381,13 +401,18 @@ if st.session_state.chatbot:
         
         # Display user message
         with st.chat_message("user"):
-            st.write(prompt)
+            st.markdown(prompt)
             
         # Get chatbot response
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                response = st.session_state.chatbot.process_query(prompt)
-                st.write(response)
-                
-                # Add bot response to chat history
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                try:
+                    response = st.session_state.chatbot.process_query(prompt)
+                    st.markdown(response)
+                    
+                    # Add bot response to chat history
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    error_message = f"Error processing query: {str(e)}"
+                    st.error(error_message)
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})

@@ -238,11 +238,13 @@ class QdrantSearch:
                         values=values
                     )
                 }
+                st.success("Using hybrid search with both dense and sparse vectors")
             elif dense_vector:
                 # Use only dense vector
                 search_params["query_vector"] = {
                     "dense": dense_vector
                 }
+                st.info("Using dense vector search only")
             else:
                 return []  # No vectors to search with
             
@@ -354,8 +356,6 @@ class RAGChatbot:
             if HAS_BM25:
                 st.info("Generating BM25 sparse embeddings...")
                 sparse_embedding = self.fastembed_client.create_sparse_embeddings(query)
-                if not sparse_embedding:
-                    st.warning("Failed to generate BM25 sparse embeddings. Falling back to dense search only.")
             else:
                 st.warning("BM25 sparse encoding not available. Using dense search only.")
             

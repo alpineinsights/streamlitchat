@@ -5,24 +5,12 @@ from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
 from openai import OpenAI
 
-# Directly import both TextEmbedding and SparseTextEmbedding
+# Try to import SparseTextEmbedding directly
 try:
-    from fastembed import TextEmbedding, SparseTextEmbedding
+    from fastembed import SparseTextEmbedding
     HAS_BM25 = True
 except ImportError:
-    try:
-        # Try to import separately in case they're in different modules
-        from fastembed import TextEmbedding
-        from fastembed.sparse import SparseTextEmbedding
-        HAS_BM25 = True
-    except ImportError:
-        # Last resort - try just the TextEmbedding
-        try:
-            from fastembed import TextEmbedding
-            HAS_BM25 = False
-        except ImportError:
-            TextEmbedding = None
-            HAS_BM25 = False
+    HAS_BM25 = False
 
 # Import streamlit ONLY after the above imports
 import streamlit as st

@@ -19,7 +19,7 @@ except ImportError:
 import streamlit as st
 
 # Voyage AI model configurations
-VOYAGE_EMBEDDING_MODEL = "voyage-large-2"  # Default model, can be overridden
+VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Keep finance-2 as default model
 VOYAGE_RERANKER_MODEL = "rerank-2"  # Latest reranker model
 
 # OpenAI model configuration
@@ -312,7 +312,7 @@ class OpenAIClient:
 
 Based on the above documents, please answer this question: {query}"""}
                 ],
-                max_tokens=1024
+                max_tokens=2048
             )
             
             # Extract the response text

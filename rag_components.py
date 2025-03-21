@@ -6,7 +6,14 @@ from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
 from openai import OpenAI
 from fastembed import TextEmbedding
-from fastembed.sparse import BM25Encoder
+
+# Try to import BM25Encoder, but provide a fallback if not available
+try:
+    from fastembed.sparse import BM25Encoder
+    HAS_BM25 = True
+except ImportError:
+    HAS_BM25 = False
+    st.warning("BM25Encoder not available in your fastembed installation. Hybrid search will not be available.")
 
 # Voyage AI model configurations
 VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Default model, can be overridden
@@ -28,31 +35,22 @@ class VoyageAIClient:
             "Authorization": f"Bearer {self.api_key}"
         }
     
-    def create_embeddings(self, text: str, model: str = VOYAGE_EMBEDDING_MODEL, output_type: str = "dense") -> Tuple[List[float], List[Tuple[int, float]]]:
+    def create_dense_embeddings(self, text: str, model: str = VOYAGE_EMBEDDING_MODEL) -> List[float]:
         """
-        Generate embeddings using Voyage AI.
+        Generate dense embeddings using Voyage AI.
         
         Args:
             text: The input text to embed
-            model: The embedding model to use (voyage-large-2, voyage-finance-2, etc.)
-            output_type: Type of embedding to generate ('hybrid', 'dense', or 'sparse')
+            model: The embedding model to use (voyage-large-2, voyage-code-2, etc.)
             
         Returns:
-            Tuple of (dense_embedding, sparse_embedding)
+            Dense embedding vector
         """
         # Prepare the request payload
         payload = {
             "model": model,
             "input": text
         }
-        
-        # Add output_type for hybrid/sparse requests
-        # Only add output_type for models that support it
-        if output_type in ["hybrid", "sparse"] and "finance" not in model:
-            payload["output_type"] = output_type
-        elif output_type in ["hybrid", "sparse"] and "finance" in model:
-            # If a finance model is being used with hybrid/sparse request, log a warning
-            st.warning(f"Model {model} doesn't support {output_type} embeddings. Falling back to dense only.")
         
         try:
             # Make the request to the Voyage API
@@ -69,31 +67,22 @@ class VoyageAIClient:
                 except:
                     error_detail = response.text
                 st.error(f"Embedding API error: {response.status_code} - {error_detail}")
-                return [], []
+                return []
                 
             # Parse the response
             data = response.json()
             
             # Extract dense embedding vector
             dense_embedding = data['data'][0]['embedding']
-            
-            # Extract sparse embedding (indices and values) if available
-            sparse_embedding = []
-            if 'sparse_embedding' in data['data'][0]:
-                sparse_data = data['data'][0]['sparse_embedding']
-                indices = sparse_data['indices']
-                values = sparse_data['values']
-                sparse_embedding = list(zip(indices, values))
-                
-            return dense_embedding, sparse_embedding
+            return dense_embedding
             
         except Exception as e:
-            st.error(f"Error generating embeddings: {str(e)}")
+            st.error(f"Error generating Voyage AI embeddings: {str(e)}")
             if 'response' in locals() and hasattr(response, 'text'):
                 st.error(f"API response: {response.text}")
-            return [], []
+            return []
     
-    def rerank_documents(self, query: str, documents: List[str], model: str = VOYAGE_RERANKER_MODEL, top_k: int = 5) -> List[Dict[str, Any]]:
+    def rerank_documents(self, query: str, documents: List[str], model: str = VOYAGE_RERANKER_MODEL, top_k: int = 20) -> List[Dict[str, Any]]:
         """
         Rerank a list of documents based on relevance to the query.
         
@@ -106,7 +95,7 @@ class VoyageAIClient:
         Returns:
             List of reranked documents with scores
         """
-        # Prepare the request payload - using top_k instead of top_n
+        # Prepare the request payload
         payload = {
             "model": model,
             "query": query,
@@ -132,7 +121,7 @@ class VoyageAIClient:
                 st.error(f"Reranking API error: {response.status_code} - {error_detail}")
                 return []
                 
-            # Parse the response - Note: Voyage API uses 'data' field, not 'results'
+            # Parse the response
             data = response.json()
             return data['data']
             
@@ -140,6 +129,42 @@ class VoyageAIClient:
             st.error(f"Error reranking documents: {str(e)}")
             if 'response' in locals() and hasattr(response, 'text'):
                 st.error(f"API response: {response.text}")
+            return []
+
+class FastEmbedClient:
+    """Client for fastembed BM25 sparse embeddings."""
+    
+    def __init__(self):
+        """Initialize the fastembed client."""
+        if HAS_BM25:
+            self.sparse_encoder = BM25Encoder()
+        else:
+            self.sparse_encoder = None
+        
+    def create_sparse_embeddings(self, text: str) -> List[Tuple[int, float]]:
+        """
+        Generate sparse embeddings using BM25.
+        
+        Args:
+            text: The input text to embed
+            
+        Returns:
+            Sparse embedding as list of (index, value) tuples
+        """
+        try:
+            if not HAS_BM25 or not self.sparse_encoder:
+                st.warning("BM25 encoder not available. Sparse embeddings couldn't be generated.")
+                return []
+                
+            sparse_vector = self.sparse_encoder.encode_documents([text])[0]
+            # Convert sparse vector to the expected format (list of (index, value) tuples)
+            indices = sparse_vector.indices.tolist()
+            values = sparse_vector.values.tolist()
+            sparse_embedding = list(zip(indices, values))
+            return sparse_embedding
+                
+        except Exception as e:
+            st.error(f"Error generating BM25 sparse embeddings: {str(e)}")
             return []
 
 class QdrantSearch:
@@ -152,7 +177,7 @@ class QdrantSearch:
     
     def hybrid_search(self, dense_vector: List[float], 
                       sparse_vector: List[Tuple[int, float]], 
-                      limit: int = 5,
+                      limit: int = 20,
                       filter_params: Optional[dict] = None) -> List[Dict[str, Any]]:
         """
         Perform hybrid search using Qdrant's Query API with RRF fusion.
@@ -205,6 +230,7 @@ class QdrantSearch:
                 
             # If we only have dense vector, use regular search
             elif dense_vector:
+                st.warning("Using dense search only. Sparse vector not available.")
                 return self.client.search(
                     collection_name=self.collection_name,
                     query_vector=("dense", dense_vector),
@@ -215,6 +241,7 @@ class QdrantSearch:
                 
             # If we only have sparse vector, use sparse search
             elif sparse_vector:
+                st.warning("Using sparse search only. Dense vector not available.")
                 indices, values = zip(*sparse_vector)
                 sparse_vector_obj = models.SparseVector(
                     indices=list(indices), 
@@ -292,80 +319,29 @@ Based on the above documents, please answer this question: {query}"""}
             st.error(f"Error generating OpenAI response: {str(e)}")
             return f"I apologize, but I encountered an error generating a response: {str(e)}"
 
-class FastEmbedClient:
-    """Client for fastembed embeddings including BM25 sparse embeddings."""
-    
-    def __init__(self):
-        """Initialize the fastembed client."""
-        self.dense_embedding_model = TextEmbedding("intfloat/e5-small")
-        self.sparse_encoder = BM25Encoder()
-        
-    def create_embeddings(self, text: str, output_type: str = "dense") -> Tuple[List[float], List[Tuple[int, float]]]:
-        """
-        Generate embeddings using fastembed.
-        
-        Args:
-            text: The input text to embed
-            output_type: Type of embedding to generate ('hybrid', 'dense', or 'sparse')
-            
-        Returns:
-            Tuple of (dense_embedding, sparse_embedding)
-        """
-        try:
-            # Generate dense embedding
-            dense_embedding = []
-            if output_type in ["dense", "hybrid"]:
-                dense_embeddings = list(self.dense_embedding_model.embed([text]))
-                if dense_embeddings:
-                    dense_embedding = dense_embeddings[0].tolist()
-            
-            # Generate sparse embedding using BM25
-            sparse_embedding = []
-            if output_type in ["sparse", "hybrid"]:
-                sparse_vector = self.sparse_encoder.encode_documents([text])[0]
-                # Convert sparse vector to the expected format (list of (index, value) tuples)
-                indices = sparse_vector.indices.tolist()
-                values = sparse_vector.values.tolist()
-                sparse_embedding = list(zip(indices, values))
-                
-            return dense_embedding, sparse_embedding
-                
-        except Exception as e:
-            st.error(f"Error generating fastembed embeddings: {str(e)}")
-            return [], []
-
 class RAGChatbot:
-    """RAG Chatbot combining all components."""
+    """RAG Chatbot combining all components for hybrid search."""
     
-    def __init__(self, qdrant_url, qdrant_api_key, collection_name, openai_api_key, voyage_api_key=None, use_fastembed=False):
+    def __init__(self, qdrant_url, qdrant_api_key, collection_name, openai_api_key, voyage_api_key):
         """Initialize all components of the RAG chatbot."""
-        # Choose between VoyageAI or FastEmbed
-        if use_fastembed or not voyage_api_key:
-            self.embedding_client = FastEmbedClient()
-            self.use_fastembed = True
-        else:
-            self.voyage_client = VoyageAIClient(voyage_api_key)
-            self.use_fastembed = False
+        # Initialize Voyage AI client for dense embeddings and reranking
+        self.voyage_client = VoyageAIClient(voyage_api_key)
         
-        # Initialize OpenAI client
+        # Initialize FastEmbed client for sparse embeddings
+        self.fastembed_client = FastEmbedClient()
+        
+        # Initialize OpenAI client for response generation
         self.openai_client = OpenAIClient(openai_api_key)
         
         # Initialize Qdrant search
         self.qdrant_search = QdrantSearch(qdrant_url, qdrant_api_key, collection_name)
     
-    def process_query(self, query: str, embedding_model: str = VOYAGE_EMBEDDING_MODEL,
-                     output_type: str = "hybrid", use_reranking: bool = True,
-                     reranker_model: str = VOYAGE_RERANKER_MODEL, top_k: int = 5) -> str:
+    def process_query(self, query: str) -> str:
         """
-        Process a user query through the complete RAG pipeline.
+        Process a user query through the complete RAG pipeline with hybrid search.
         
         Args:
             query: The user's question
-            embedding_model: The model to use for generating embeddings (only for VoyageAI)
-            output_type: Type of embedding to generate ('hybrid', 'dense', or 'sparse')
-            use_reranking: Whether to use reranking (only for VoyageAI)
-            reranker_model: The model to use for reranking (only for VoyageAI)
-            top_k: Number of documents to retrieve
             
         Returns:
             Generated response
@@ -373,28 +349,23 @@ class RAGChatbot:
         try:
             # Step 1: Generate embeddings for the query
             st.info("Generating embeddings...")
-            if self.use_fastembed:
-                dense_embedding, sparse_embedding = self.embedding_client.create_embeddings(
-                    query, output_type=output_type
-                )
-            else:
-                dense_embedding, sparse_embedding = self.voyage_client.create_embeddings(
-                    query, model=embedding_model, output_type=output_type
-                )
             
+            # Generate dense embeddings with Voyage AI
+            dense_embedding = self.voyage_client.create_dense_embeddings(query)
             if not dense_embedding:
-                return "Failed to generate dense embeddings for your query."
+                return "Failed to generate dense embeddings for your query. Please try again later."
             
-            # Check if sparse embeddings were generated if hybrid was requested
-            if output_type in ["hybrid", "sparse"] and not sparse_embedding:
-                st.warning(f"Could not generate sparse embeddings with model {embedding_model}. Falling back to dense search only.")
+            # Generate sparse embeddings with BM25
+            sparse_embedding = self.fastembed_client.create_sparse_embeddings(query)
+            if not sparse_embedding and HAS_BM25:
+                st.warning("Could not generate sparse embeddings. Falling back to dense search only.")
             
-            # Step 2: Perform search in Qdrant
+            # Step 2: Perform hybrid search in Qdrant
             st.info("Retrieving relevant documents...")
             search_results = self.qdrant_search.hybrid_search(
                 dense_vector=dense_embedding,
                 sparse_vector=sparse_embedding,
-                limit=top_k
+                limit=20  # Always use 20 as default
             )
             
             if not search_results:
@@ -413,16 +384,17 @@ class RAGChatbot:
             if not documents:
                 return "Found results, but they don't contain text fields. Check your Qdrant collection structure."
             
-            # Step 4: Optionally rerank documents
-            if use_reranking and len(documents) > 1:
-                st.info("Reranking documents...")
-                reranked_results = self.voyage_client.rerank_documents(
-                    query, documents, model=reranker_model, top_k=top_k
-                )
-                
-                if reranked_results:
-                    # Get the reranked document texts in the new order
-                    documents = [documents[result['index']] for result in reranked_results]
+            # Step 4: Always rerank documents
+            st.info("Reranking documents...")
+            reranked_results = self.voyage_client.rerank_documents(
+                query, documents, top_k=20
+            )
+            
+            if reranked_results:
+                # Get the reranked document texts in the new order
+                documents = [documents[result['index']] for result in reranked_results]
+            else:
+                st.warning("Reranking failed. Using original document order.")
             
             # Step 5: Generate response with OpenAI
             st.info("Generating response with OpenAI...")

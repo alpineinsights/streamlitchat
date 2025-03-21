@@ -6,10 +6,10 @@ from typing import List, Dict, Any, Tuple, Optional
 from openai import OpenAI
 from fastembed import TextEmbedding
 
-# Try to import BM25Encoder, but provide a fallback if not available
+# Try to import SparseTextEmbedding for BM25, but provide a fallback if not available
 # DO NOT use streamlit functions here!
 try:
-    from fastembed.sparse import BM25Encoder
+    from fastembed import SparseTextEmbedding
     HAS_BM25 = True
 except ImportError:
     HAS_BM25 = False
@@ -24,6 +24,13 @@ VOYAGE_RERANKER_MODEL = "rerank-2"  # Latest reranker model
 
 # OpenAI model configuration
 OPENAI_MODEL = "gpt-4o"
+
+# Vector dimensions
+VECTOR_DIMENSIONS = {
+    "voyage-finance-2": 1024,
+    "voyage-large-3": 4096,
+    "sparse": 100  # Updated for BM25 sparse embedding
+}
 
 class VoyageAIClient:
     """Client for Voyage AI embedding and reranking services."""
@@ -44,7 +51,7 @@ class VoyageAIClient:
         
         Args:
             text: The input text to embed
-            model: The embedding model to use (voyage-large-2, voyage-code-2, etc.)
+            model: The embedding model to use (voyage-finance-2, voyage-code-2, etc.)
             
         Returns:
             Dense embedding vector
@@ -90,25 +97,24 @@ class VoyageAIClient:
         Rerank a list of documents based on relevance to the query.
         
         Args:
-            query: The search query
-            documents: List of document texts to rerank
-            model: The reranking model to use
+            query: The user's question
+            documents: List of documents to rerank
+            model: The reranker model to use
             top_k: Number of top results to return
             
         Returns:
-            List of reranked documents with scores
+            List of reranked document indices with scores
         """
         # Prepare the request payload
         payload = {
             "model": model,
             "query": query,
             "documents": documents,
-            "top_k": top_k,
-            "truncation": True
+            "top_k": min(top_k, len(documents))
         }
         
         try:
-            # Make the request to the Voyage AI API
+            # Make the request to the Voyage API
             response = requests.post(
                 self.reranking_endpoint,
                 headers=self.headers,
@@ -126,7 +132,9 @@ class VoyageAIClient:
                 
             # Parse the response
             data = response.json()
-            return data['data']
+            
+            # Extract reranking results
+            return data['results']
             
         except Exception as e:
             st.error(f"Error reranking documents: {str(e)}")
@@ -140,13 +148,14 @@ class FastEmbedClient:
     def __init__(self):
         """Initialize the fastembed client."""
         if HAS_BM25:
-            self.sparse_encoder = BM25Encoder()
+            # Use the same approach as in the ETL pipeline
+            self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
         else:
-            self.sparse_encoder = None
+            self.sparse_model = None
         
     def create_sparse_embeddings(self, text: str) -> List[Tuple[int, float]]:
         """
-        Generate sparse embeddings using BM25.
+        Generate sparse embeddings using BM25, following the exact approach used in the ETL pipeline.
         
         Args:
             text: The input text to embed
@@ -155,14 +164,21 @@ class FastEmbedClient:
             Sparse embedding as list of (index, value) tuples
         """
         try:
-            if not HAS_BM25 or not self.sparse_encoder:
+            if not HAS_BM25 or not self.sparse_model:
                 st.warning("BM25 encoder not available. Sparse embeddings couldn't be generated.")
                 return []
                 
-            sparse_vector = self.sparse_encoder.encode_documents([text])[0]
-            # Convert sparse vector to the expected format (list of (index, value) tuples)
-            indices = sparse_vector.indices.tolist()
-            values = sparse_vector.values.tolist()
+            # Generate sparse embedding with BM25 - same as in ETL pipeline
+            embeddings = list(self.sparse_model.embed([text]))
+            if not embeddings:
+                st.warning("Failed to generate BM25 embedding")
+                return []
+            
+            sparse_embedding = embeddings[0]
+            
+            # Convert to (index, value) tuple list format for Qdrant
+            indices = sparse_embedding.indices.tolist()
+            values = sparse_embedding.values.tolist()
             sparse_embedding = list(zip(indices, values))
             return sparse_embedding
                 
@@ -171,98 +187,70 @@ class FastEmbedClient:
             return []
 
 class QdrantSearch:
-    """Handles search operations with Qdrant."""
+    """Client for Qdrant vector database search."""
     
     def __init__(self, url: str, api_key: str, collection_name: str):
-        """Initialize the Qdrant search client."""
-        self.client = QdrantClient(url=url, api_key=api_key)
+        """Initialize the Qdrant client."""
+        self.client = QdrantClient(
+            url=url,
+            api_key=api_key,
+            timeout=60,
+            prefer_grpc=False  # Force HTTP protocol
+        )
         self.collection_name = collection_name
     
-    def hybrid_search(self, dense_vector: List[float], 
-                      sparse_vector: List[Tuple[int, float]], 
-                      limit: int = 20,
-                      filter_params: Optional[dict] = None) -> List[Dict[str, Any]]:
+    def hybrid_search(self, dense_vector: List[float], sparse_vector: List[Tuple[int, float]], limit: int = 20, filter_conditions: Optional[Dict] = None) -> List[Any]:
         """
-        Perform hybrid search using Qdrant's Query API with RRF fusion.
+        Perform hybrid search in Qdrant using both dense and sparse vectors.
         
         Args:
             dense_vector: Dense embedding vector
             sparse_vector: Sparse embedding as list of (index, value) tuples
             limit: Maximum number of results to return
-            filter_params: Optional filter parameters
+            filter_conditions: Optional filter conditions for search
             
         Returns:
             List of search results
         """
         try:
-            # Convert filter if provided
-            filter_obj = None
-            if filter_params:
-                filter_obj = models.Filter(**filter_params)
+            # Prepare search parameters
+            search_params = {
+                "collection_name": self.collection_name,
+                "limit": limit,
+                "with_payload": True,
+                "with_vectors": False,
+            }
             
-            # If we have both dense and sparse vectors, use the Query API with RRF fusion
+            # Prepare query vector(s)
             if dense_vector and sparse_vector:
-                # Convert sparse vector to the format Qdrant expects
-                indices, values = zip(*sparse_vector)
+                # Convert sparse vector format to Qdrant's expected format
+                indices = [idx for idx, _ in sparse_vector]
+                values = [val for _, val in sparse_vector]
                 
-                # Execute query with RRF fusion using the client's query_points method
-                results = self.client.query_points(
-                    collection_name=self.collection_name,
-                    prefetch=[
-                        models.Prefetch(
-                            query=models.SparseVector(
-                                indices=list(indices), 
-                                values=list(values)
-                            ),
-                            using="sparse",
-                            limit=limit * 2,
-                            filter=filter_obj
-                        ),
-                        models.Prefetch(
-                            query=dense_vector,
-                            using="dense",
-                            limit=limit * 2,
-                            filter=filter_obj
-                        )
-                    ],
-                    query=models.FusionQuery(fusion=models.Fusion.RRF),
-                    limit=limit,
-                    with_payload=True
-                )
-                return results
-                
-            # If we only have dense vector, use regular search
+                # Use hybrid search with both vectors
+                search_params["query_vector"] = {
+                    "dense": dense_vector,
+                    "sparse": models.SparseVector(
+                        indices=indices,
+                        values=values
+                    )
+                }
             elif dense_vector:
-                st.warning("Using dense search only. Sparse vector not available.")
-                return self.client.search(
-                    collection_name=self.collection_name,
-                    query_vector=("dense", dense_vector),
-                    query_filter=filter_obj,
-                    limit=limit,
-                    with_payload=True
-                )
-                
-            # If we only have sparse vector, use sparse search
-            elif sparse_vector:
-                st.warning("Using sparse search only. Dense vector not available.")
-                indices, values = zip(*sparse_vector)
-                sparse_vector_obj = models.SparseVector(
-                    indices=list(indices), 
-                    values=list(values)
-                )
-                
-                return self.client.search(
-                    collection_name=self.collection_name,
-                    query_vector=("sparse", sparse_vector_obj),
-                    query_filter=filter_obj,
-                    limit=limit,
-                    with_payload=True
-                )
-                
+                # Use only dense vector
+                search_params["query_vector"] = {
+                    "dense": dense_vector
+                }
             else:
-                st.error("No vectors provided for search")
-                return []
-                
+                return []  # No vectors to search with
+            
+            # Add filter if provided
+            if filter_conditions:
+                search_params["query_filter"] = models.Filter(**filter_conditions)
+            
+            # Execute search
+            results = self.client.search(**search_params)
+            return results
+            
         except Exception as e:
             st.error(f"Error searching Qdrant: {str(e)}")
             return []
@@ -270,13 +258,10 @@ class QdrantSearch:
 class OpenAIClient:
     """Client for OpenAI GPT-4o completions."""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, model: str = OPENAI_MODEL):
         """Initialize the OpenAI client with API key."""
         self.api_key = api_key
-        self.model = OPENAI_MODEL
-        
-        # Fix for the proxies error - create client with just the API key
-        # This is compatible with newer versions of the OpenAI Python library
+        self.model = model
         self.client = OpenAI(api_key=api_key)
     
     def generate_response(self, query: str, contexts: List[str], system_prompt: str = None) -> str:
@@ -291,14 +276,17 @@ class OpenAIClient:
         Returns:
             OpenAI's response
         """
-        # Create combined context
-        combined_contexts = "\n\n".join([f"DOCUMENT: {context}" for context in contexts])
+        # Combine contexts with line breaks
+        combined_contexts = "\n\n".join([f"Document {i+1}:\n{context}" for i, context in enumerate(contexts)])
         
-        # If no system prompt is provided, use a default one
+        # Create system prompt if not provided
         if system_prompt is None:
-            system_prompt = """You are a helpful AI assistant. Answer the user's question based on the provided context.
-            If the answer cannot be found in the context, say "I don't have enough information to answer that question."
-            Keep your answers concise and to the point."""
+            system_prompt = (
+                "You are a helpful AI assistant that answers questions based on the provided documents. "
+                "If the documents contain the information to answer the question, provide a comprehensive response based solely on that information. "
+                "If the answer isn't contained in the documents, state that you don't have enough information to answer the question. "
+                "Do not make up information or use your prior knowledge to answer."
+            )
         
         try:
             # Make the request to the OpenAI API
@@ -312,7 +300,7 @@ class OpenAIClient:
 
 Based on the above documents, please answer this question: {query}"""}
                 ],
-                max_tokens=2048
+                max_tokens=2048  # Increased from 1024 to 2048
             )
             
             # Extract the response text
@@ -358,7 +346,7 @@ class RAGChatbot:
             if not dense_embedding:
                 return "Failed to generate dense embeddings for your query. Please try again later."
             
-            # Generate sparse embeddings with BM25 separately
+            # Generate sparse embeddings with BM25 separately using the ETL approach
             sparse_embedding = self.fastembed_client.create_sparse_embeddings(query)
             if not sparse_embedding and HAS_BM25:
                 st.warning("Could not generate sparse embeddings. Falling back to dense search only.")
@@ -387,7 +375,7 @@ class RAGChatbot:
             
             # Try alternative field names if no chunk_text is found
             if not documents:
-                for field in ["text", "content", "document"]:
+                for field in ["text", "content", "document", "context"]:
                     documents = [result.payload.get(field, "") for result in search_results if field in result.payload]
                     if documents:
                         break

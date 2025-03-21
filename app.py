@@ -5,17 +5,21 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
 from openai import OpenAI
-from rag_components import VoyageAIClient, QdrantSearch, OpenAIClient, RAGChatbot, VOYAGE_EMBEDDING_MODEL, VOYAGE_RERANKER_MODEL
+from rag_components import VoyageAIClient, QdrantSearch, OpenAIClient, RAGChatbot, VOYAGE_EMBEDDING_MODEL, VOYAGE_RERANKER_MODEL, HAS_BM25
 
-# Set page configuration FIRST - before any other Streamlit commands
+# Set page configuration FIRST - must come before any other Streamlit commands
 st.set_page_config(
     page_title="RAG Chatbot",
     page_icon="🤖",
     layout="wide"
 )
 
-# Now import from rag_components AFTER page configuration
+# Now import necessary modules - AFTER page configuration
 from rag_components import RAGChatbot
+
+# Show warning about BM25 if needed - now safely AFTER set_page_config
+if not HAS_BM25:
+    st.warning("BM25Encoder not available in your fastembed installation. Hybrid search will not be available.")
 
 # Voyage AI model configurations
 VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Default model, can be overridden

@@ -1,6 +1,5 @@
 import os
 import requests
-import streamlit as st
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
@@ -8,15 +7,19 @@ from openai import OpenAI
 from fastembed import TextEmbedding
 
 # Try to import BM25Encoder, but provide a fallback if not available
+# DO NOT use streamlit functions here!
 try:
     from fastembed.sparse import BM25Encoder
     HAS_BM25 = True
 except ImportError:
     HAS_BM25 = False
-    st.warning("BM25Encoder not available in your fastembed installation. Hybrid search will not be available.")
+    # No st.warning() here, we'll handle this in app.py
+
+# Import streamlit ONLY after the above imports
+import streamlit as st
 
 # Voyage AI model configurations
-VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Default model, can be overridden
+VOYAGE_EMBEDDING_MODEL = "voyage-large-2"  # Default model, can be overridden
 VOYAGE_RERANKER_MODEL = "rerank-2"  # Latest reranker model
 
 # OpenAI model configuration

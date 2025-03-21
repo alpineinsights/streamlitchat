@@ -350,23 +350,31 @@ class RAGChatbot:
             # Step 1: Generate embeddings for the query
             st.info("Generating embeddings...")
             
-            # Generate dense embeddings with Voyage AI
+            # Generate dense embeddings with Voyage AI - use dense output type only
             dense_embedding = self.voyage_client.create_dense_embeddings(query)
             if not dense_embedding:
                 return "Failed to generate dense embeddings for your query. Please try again later."
             
-            # Generate sparse embeddings with BM25
+            # Generate sparse embeddings with BM25 separately
             sparse_embedding = self.fastembed_client.create_sparse_embeddings(query)
             if not sparse_embedding and HAS_BM25:
                 st.warning("Could not generate sparse embeddings. Falling back to dense search only.")
             
-            # Step 2: Perform hybrid search in Qdrant
+            # Step 2: Perform search in Qdrant
             st.info("Retrieving relevant documents...")
-            search_results = self.qdrant_search.hybrid_search(
-                dense_vector=dense_embedding,
-                sparse_vector=sparse_embedding,
-                limit=20  # Always use 20 as default
-            )
+            try:
+                search_results = self.qdrant_search.hybrid_search(
+                    dense_vector=dense_embedding,
+                    sparse_vector=sparse_embedding,
+                    limit=20
+                )
+            except Exception as e:
+                st.error(f"Error searching Qdrant: {str(e)}")
+                # Try a fallback to dense-only search if hybrid search fails
+                if "Collection doesn't exist" in str(e) or "Not found" in str(e):
+                    st.warning(f"Collection might not support hybrid search. Please check your collection: {self.qdrant_search.collection_name}")
+                    return f"Error: The collection '{self.qdrant_search.collection_name}' doesn't exist or doesn't support hybrid search. Please check your Qdrant settings."
+                return f"Error querying database: {str(e)}"
             
             if not search_results:
                 return "No relevant documents found to answer your question."

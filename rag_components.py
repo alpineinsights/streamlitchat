@@ -145,8 +145,14 @@ class FastEmbedClient:
     def __init__(self):
         """Initialize the fastembed client."""
         if HAS_BM25:
-            # Use the same approach as in the ETL pipeline
-            self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
+            try:
+                # Use the same approach as in the ETL pipeline
+                self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
+                st.success("Successfully initialized BM25 sparse embedding model")
+            except Exception as e:
+                st.error(f"Failed to initialize BM25 sparse model: {str(e)}")
+                self.sparse_model = None
+                HAS_BM25 = False
         else:
             self.sparse_model = None
         
@@ -161,7 +167,7 @@ class FastEmbedClient:
             Sparse embedding as list of (index, value) tuples
         """
         try:
-            if not HAS_BM25 or not self.sparse_model:
+            if not HAS_BM25 or self.sparse_model is None:
                 st.warning("BM25 encoder not available. Sparse embeddings couldn't be generated.")
                 return []
                 
@@ -338,15 +344,20 @@ class RAGChatbot:
             # Step 1: Generate embeddings for the query
             st.info("Generating embeddings...")
             
-            # Generate dense embeddings with Voyage AI - use dense output type only
+            # Generate dense embeddings with Voyage AI
             dense_embedding = self.voyage_client.create_dense_embeddings(query)
             if not dense_embedding:
                 return "Failed to generate dense embeddings for your query. Please try again later."
             
-            # Generate sparse embeddings with BM25 separately using the ETL approach
-            sparse_embedding = self.fastembed_client.create_sparse_embeddings(query)
-            if not sparse_embedding and HAS_BM25:
-                st.warning("Could not generate sparse embeddings. Falling back to dense search only.")
+            # Generate sparse embeddings with BM25 separately
+            sparse_embedding = None
+            if HAS_BM25:
+                st.info("Generating BM25 sparse embeddings...")
+                sparse_embedding = self.fastembed_client.create_sparse_embeddings(query)
+                if not sparse_embedding:
+                    st.warning("Failed to generate BM25 sparse embeddings. Falling back to dense search only.")
+            else:
+                st.warning("BM25 sparse encoding not available. Using dense search only.")
             
             # Step 2: Perform search in Qdrant
             st.info("Retrieving relevant documents...")

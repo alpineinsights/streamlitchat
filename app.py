@@ -1,11 +1,21 @@
+import streamlit as st
 import os
 import requests
-import streamlit as st
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from typing import List, Dict, Any, Tuple, Optional
 from openai import OpenAI
 from rag_components import VoyageAIClient, QdrantSearch, OpenAIClient, RAGChatbot, VOYAGE_EMBEDDING_MODEL, VOYAGE_RERANKER_MODEL
+
+# Set page configuration FIRST - before any other Streamlit commands
+st.set_page_config(
+    page_title="RAG Chatbot",
+    page_icon="🤖",
+    layout="wide"
+)
+
+# Now import from rag_components AFTER page configuration
+from rag_components import RAGChatbot
 
 # Voyage AI model configurations
 VOYAGE_EMBEDDING_MODEL = "voyage-finance-2"  # Default model, can be overridden
@@ -334,13 +344,6 @@ class RAGChatbot:
         except Exception as e:
             st.error(f"Error processing query: {str(e)}")
             return f"I encountered an error while processing your query: {str(e)}"
-
-# Set page configuration
-st.set_page_config(
-    page_title="RAG Chatbot",
-    page_icon="🤖",
-    layout="wide"
-)
 
 # Set up your Streamlit application
 st.title("RAG Chatbot with Voyage AI and OpenAI")

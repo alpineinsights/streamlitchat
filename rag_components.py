@@ -144,6 +144,7 @@ class FastEmbedClient:
     
     def __init__(self):
         """Initialize the fastembed client."""
+        self.sparse_model = None
         if HAS_BM25:
             try:
                 # Use the same approach as in the ETL pipeline
@@ -152,9 +153,6 @@ class FastEmbedClient:
             except Exception as e:
                 st.error(f"Failed to initialize BM25 sparse model: {str(e)}")
                 self.sparse_model = None
-                HAS_BM25 = False
-        else:
-            self.sparse_model = None
         
     def create_sparse_embeddings(self, text: str) -> List[Tuple[int, float]]:
         """
@@ -166,12 +164,16 @@ class FastEmbedClient:
         Returns:
             Sparse embedding as list of (index, value) tuples
         """
+        # DEBUG: Print state to diagnose the issue
+        st.write(f"DEBUG: HAS_BM25 = {HAS_BM25}, sparse_model = {self.sparse_model is not None}")
+        
         try:
             if not HAS_BM25 or self.sparse_model is None:
                 st.warning("BM25 encoder not available. Sparse embeddings couldn't be generated.")
                 return []
                 
             # Generate sparse embedding with BM25 - same as in ETL pipeline
+            st.write("DEBUG: About to call sparse_model.embed...")
             embeddings = list(self.sparse_model.embed([text]))
             if not embeddings:
                 st.warning("Failed to generate BM25 embedding")
@@ -182,11 +184,14 @@ class FastEmbedClient:
             # Convert to (index, value) tuple list format for Qdrant
             indices = sparse_embedding.indices.tolist()
             values = sparse_embedding.values.tolist()
+            st.success(f"DEBUG: Successfully generated BM25 sparse embedding with {len(indices)} non-zero entries")
             sparse_embedding = list(zip(indices, values))
             return sparse_embedding
                 
         except Exception as e:
             st.error(f"Error generating BM25 sparse embeddings: {str(e)}")
+            import traceback
+            st.error(f"Traceback: {traceback.format_exc()}")
             return []
 
 class QdrantSearch:
@@ -354,10 +359,14 @@ class RAGChatbot:
             # Generate sparse embeddings with BM25 separately
             sparse_embedding = None
             if HAS_BM25:
-                st.info("Generating BM25 sparse embeddings...")
+                st.info("Generating BM25 sparse embeddings with fastembed...")
                 sparse_embedding = self.fastembed_client.create_sparse_embeddings(query)
             else:
                 st.warning("BM25 sparse encoding not available. Using dense search only.")
+            
+            # Debug: Force clear any error messages about Voyage and sparse
+            for i in range(3):
+                dummy = st.empty()
             
             # Step 2: Perform search in Qdrant
             st.info("Retrieving relevant documents...")
